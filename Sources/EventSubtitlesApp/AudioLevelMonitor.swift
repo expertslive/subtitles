@@ -18,8 +18,7 @@ enum AudioLevelMonitorError: LocalizedError {
     }
 }
 
-@MainActor
-final class AudioLevelMonitor {
+final class AudioLevelMonitor: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private var running = false
     private var recordingFile: AVAudioFile?
