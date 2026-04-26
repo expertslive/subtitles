@@ -4,77 +4,105 @@ import SwiftUI
 struct OperatorView: View {
     @EnvironmentObject private var state: AppState
 
+    private let operatorStripWidth: CGFloat = 390
+
+    @State private var selectedWorkspace: OperatorWorkspace = .live
+    @State private var glossarySearch = ""
+    @State private var glossaryTestInput = "We deploy kubernetes with postgres and oauth on apple silicon."
+    @State private var translationTestInput = "Welcome developers, this conference session is about cloud latency and security."
+
     var body: some View {
         HStack(spacing: 0) {
-            controls
-                .frame(width: 410)
+            operatorStrip
+                .frame(width: operatorStripWidth)
 
             Divider()
 
-            liveWorkspace
+            workspaceShell
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sessionControls
-                .layoutPriority(2)
-            outputControls
-                .layoutPriority(1)
-
-            inspectorTabs
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private var operatorStrip: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 12) {
+                sessionControls
+                quickOutputControls
+            }
+            .padding(14)
+            .frame(width: operatorStripWidth, alignment: .topLeading)
         }
-        .padding(14)
-        .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    private var inspectorTabs: some View {
-        TabView {
-            ScrollView {
-                styleControls
-                    .padding(10)
-            }
-            .tabItem {
-                Label("Style", systemImage: "textformat.size")
+    private var workspaceShell: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            workspaceTabs
+
+            HStack {
+                Label(selectedWorkspace.title, systemImage: selectedWorkspace.systemImage)
+                    .font(.title2.weight(.semibold))
+
+                Spacer()
+
+                Text(state.isRunning ? "Running" : "Idle")
+                    .font(.caption)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(state.isRunning ? Color.green.opacity(0.22) : Color.secondary.opacity(0.16))
+                    .clipShape(Capsule())
             }
 
-            ScrollView {
-                glossaryControls
-                    .padding(10)
-            }
-            .tabItem {
-                Label("Glossary", systemImage: "list.bullet.rectangle")
-            }
+            workspaceContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(22)
+    }
 
-            ScrollView {
-                logControls
-                    .padding(10)
-            }
-            .tabItem {
-                Label("Log", systemImage: "folder")
-            }
-
-            ScrollView {
-                modelControls
-                    .padding(10)
-            }
-            .tabItem {
-                Label("Model", systemImage: "cpu")
-            }
-
-            ScrollView {
-                translationControls
-                    .padding(10)
-            }
-            .tabItem {
-                Label("Translate", systemImage: "arrow.left.arrow.right")
+    private var workspaceTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(OperatorWorkspace.allCases) { workspace in
+                    Button {
+                        selectedWorkspace = workspace
+                    } label: {
+                        Label(workspace.title, systemImage: workspace.systemImage)
+                            .font(.callout.weight(selectedWorkspace == workspace ? .semibold : .regular))
+                            .lineLimit(1)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
+                            .background(selectedWorkspace == workspace ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor))
+                            .foregroundStyle(selectedWorkspace == workspace ? Color.accentColor : Color.primary)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .help(workspace.title)
+                }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var workspaceContent: some View {
+        switch selectedWorkspace {
+        case .live:
+            liveWorkspace
+        case .style:
+            styleWorkspace
+        case .glossary:
+            glossaryWorkspace
+        case .logs:
+            logsWorkspace
+        case .models:
+            modelsWorkspace
+        case .translation:
+            translationWorkspace
+        case .audio:
+            audioWorkspace
+        case .output:
+            outputWorkspace
+        }
     }
 
     private var sessionControls: some View {
@@ -82,12 +110,20 @@ struct OperatorView: View {
             TextField("Session name", text: $state.sessionName)
                 .textFieldStyle(.roundedBorder)
 
-            Picker("Engine", selection: $state.transcriptionEngine) {
+            Picker("Capture", selection: $state.transcriptionEngine) {
                 ForEach(TranscriptionEngineChoice.allCases) { engine in
                     Text(engine.label).tag(engine)
                 }
             }
             .disabled(state.isRunning)
+
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: "info.circle")
+                Text(state.transcriptionEngine.helpText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             Picker("Mode", selection: $state.mode) {
                 ForEach(ProcessingMode.allCases) { mode in
@@ -101,23 +137,7 @@ struct OperatorView: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .foregroundStyle(.secondary)
-                Text(state.audioInputDescription)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                Button {
-                    state.refreshAudioInputDevice()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh audio input")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            audioInputRow
 
             HStack {
                 Button {
@@ -137,25 +157,7 @@ struct OperatorView: View {
 
             AudioMeter(level: state.audioLevel)
 
-            HStack(spacing: 8) {
-                Text(state.engineStatus)
-                    .lineLimit(1)
-
-                Spacer()
-
-                Text(state.sessionElapsedText)
-                    .monospacedDigit()
-
-                Image(systemName: state.sessionLogStatus == "Recording" ? "record.circle.fill" : "checkmark.circle")
-                    .foregroundStyle(state.sessionLogStatus == "Recording" ? .red : .secondary)
-                Text(state.sessionLogStatus)
-                    .lineLimit(1)
-                Text("\(state.sessionSegmentCount)")
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            sessionStatusRow
 
             if let errorMessage = state.errorMessage {
                 Text(errorMessage)
@@ -181,12 +183,12 @@ struct OperatorView: View {
         }
     }
 
-    private var outputControls: some View {
+    private var quickOutputControls: some View {
         ControlPanel(title: "Output") {
             Button {
                 state.showOutputWindow()
             } label: {
-                Label("Show Output Window", systemImage: "rectangle.on.rectangle")
+                Label("Show Window", systemImage: "rectangle.on.rectangle")
                     .frame(maxWidth: .infinity)
             }
 
@@ -205,20 +207,97 @@ struct OperatorView: View {
                 }
                 .help("Restore output window")
             }
-
-            HStack {
-                Button("Chroma Green") {
-                    state.useChromaGreen()
-                }
-
-                Button("Black") {
-                    state.useBlackBackground()
-                }
-            }
         }
     }
 
-    private var styleControls: some View {
+    private var audioInputRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "waveform")
+                .foregroundStyle(.secondary)
+            Text(state.audioInputDescription)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Button {
+                state.refreshAudioInputDevice()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .help("Refresh audio input")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private var sessionStatusRow: some View {
+        HStack(spacing: 7) {
+            Text(state.engineStatus)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text(state.sessionElapsedText)
+                .monospacedDigit()
+
+            Image(systemName: state.sessionLogStatus == "Recording" ? "record.circle.fill" : "checkmark.circle")
+                .foregroundStyle(state.sessionLogStatus == "Recording" ? .red : .secondary)
+
+            Text(state.sessionLogStatus)
+                .lineLimit(1)
+
+            Text("\(state.sessionSegmentCount)")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private var liveWorkspace: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            previewPanel(maxHeight: 430)
+
+            HStack(alignment: .top, spacing: 18) {
+                currentTranscript
+                historyPanel
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+
+    private var styleWorkspace: some View {
+        ScrollView {
+            HStack(alignment: .top, spacing: 18) {
+                VStack(alignment: .leading, spacing: 16) {
+                    ControlPanel(title: "Typography") {
+                        typographyControls
+                    }
+
+                    ControlPanel(title: "Layout") {
+                        layoutControls
+                    }
+                }
+                .frame(width: 430)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    previewPanel(maxHeight: 360)
+
+                    ControlPanel(title: "Color And Shadow") {
+                        colorControls
+                    }
+
+                    ControlPanel(title: "Presets") {
+                        stylePresetControls
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var typographyControls: some View {
         VStack(alignment: .leading, spacing: 12) {
             LabeledContent("Font") {
                 Picker("Font", selection: $state.fontName) {
@@ -234,36 +313,6 @@ struct OperatorView: View {
                 get: { Double(state.targetCharactersPerLine) },
                 set: { state.targetCharactersPerLine = Int($0) }
             ), range: 28...60, step: 1)
-            SliderRow(title: "Safe margin", value: $state.safeMargin, range: 28...180, step: 1)
-            SliderRow(title: "Line spacing", value: $state.lineSpacing, range: 0...28, step: 1)
-
-            HStack(spacing: 12) {
-                Text("Lines")
-                Picker("Lines", selection: $state.maxLines) {
-                    Text("2").tag(2)
-                    Text("3").tag(3)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 92)
-
-                Spacer()
-
-                Toggle("Text shadow", isOn: $state.shadowEnabled)
-            }
-
-            Picker("Position", selection: $state.captionPosition) {
-                ForEach(CaptionVerticalPosition.allCases) { position in
-                    Text(position.label).tag(position)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            HStack(spacing: 18) {
-                ColorPicker("Text", selection: $state.foregroundColor)
-                ColorPicker("Background", selection: $state.backgroundColor)
-            }
-
-            SliderRow(title: "Shadow", value: $state.shadowRadius, range: 0...18, step: 1)
 
             Button {
                 state.saveSettings()
@@ -274,48 +323,312 @@ struct OperatorView: View {
         }
     }
 
-    private var glossaryControls: some View {
-        TextEditor(text: $state.glossaryText)
-            .font(.system(.body, design: .monospaced))
-            .frame(minHeight: 280)
-            .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.25))
+    private var layoutControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SliderRow(title: "Safe margin", value: $state.safeMargin, range: 28...180, step: 1)
+            SliderRow(title: "Line spacing", value: $state.lineSpacing, range: 0...28, step: 1)
+
+            HStack(spacing: 12) {
+                Text("Lines")
+
+                Picker("Lines", selection: $state.maxLines) {
+                    Text("2").tag(2)
+                    Text("3").tag(3)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 92)
+
+                Spacer()
             }
+
+            Picker("Position", selection: $state.captionPosition) {
+                ForEach(CaptionVerticalPosition.allCases) { position in
+                    Text(position.label).tag(position)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
     }
 
-    private var logControls: some View {
+    private var colorControls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            LabeledContent("Status", value: state.sessionLogStatus)
-            LabeledContent("Segments", value: "\(state.sessionSegmentCount)")
+            HStack(spacing: 18) {
+                ColorPicker("Text", selection: $state.foregroundColor)
+                ColorPicker("Background", selection: $state.backgroundColor)
+            }
 
-            if let path = state.sessionDirectoryPath {
-                Text(path)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
-                    .textSelection(.enabled)
+            Toggle("Text shadow", isOn: $state.shadowEnabled)
+            SliderRow(title: "Shadow", value: $state.shadowRadius, range: 0...18, step: 1)
+        }
+    }
+
+    private var stylePresetControls: some View {
+        HStack {
+            Button {
+                state.useChromaGreen()
+                state.foregroundColor = .white
+                state.shadowEnabled = true
+                state.captionPosition = .bottom
+            } label: {
+                Label("Chroma", systemImage: "wand.and.stars")
+            }
+
+            Button {
+                state.useBlackBackground()
+                state.foregroundColor = .white
+                state.shadowEnabled = false
+                state.captionPosition = .bottom
+            } label: {
+                Label("Black", systemImage: "rectangle.fill")
+            }
+
+            Button {
+                state.foregroundColor = .yellow
+                state.useBlackBackground()
+                state.shadowEnabled = false
+                state.fontSize = 78
+            } label: {
+                Label("High Contrast", systemImage: "circle.lefthalf.filled")
+            }
+        }
+    }
+
+    private var glossaryWorkspace: some View {
+        GeometryReader { proxy in
+            let useColumns = proxy.size.width >= 920
+            let toolsWidth = min(420, max(340, proxy.size.width * 0.34))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    glossaryHeader
+
+                    if useColumns {
+                        HStack(alignment: .top, spacing: 18) {
+                            glossaryEditorPanel
+                                .frame(maxWidth: .infinity)
+
+                            glossaryToolsPanel
+                                .frame(width: toolsWidth)
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 16) {
+                            glossaryEditorPanel
+                            glossaryToolsPanel
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    private var glossaryHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                TextField("Search glossary", text: $glossarySearch)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 360)
+
+                Spacer()
 
                 Button {
-                    state.openSessionFolder()
+                    state.saveSettings()
                 } label: {
-                    Label("Open Folder", systemImage: "folder")
-                        .frame(maxWidth: .infinity)
+                    Label("Save Glossary", systemImage: "square.and.arrow.down")
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("metadata.json")
-                Text("source-transcript.txt")
-                Text("display-transcript.txt")
-                Text("segments.jsonl")
-                Text("draft.srt")
-                Text("source.srt")
-                Text("display.srt")
-                Text("input-audio.caf")
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("Search glossary", text: $glossarySearch)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    state.saveSettings()
+                } label: {
+                    Label("Save Glossary", systemImage: "square.and.arrow.down")
+                }
             }
-            .font(.system(.caption, design: .monospaced))
+        }
+    }
+
+    private var glossaryEditorPanel: some View {
+        ControlPanel(title: "Glossary Editor") {
+            TextEditor(text: $state.glossaryText)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 420)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.25))
+                }
+        }
+    }
+
+    private var glossaryToolsPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ControlPanel(title: "Term Table") {
+                glossaryTable
+            }
+
+            ControlPanel(title: "Test Phrase") {
+                glossaryTestPanel
+            }
+        }
+    }
+
+    private var glossaryTable: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Input")
+                    .font(.caption.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Output")
+                    .font(.caption.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             .foregroundStyle(.secondary)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(filteredGlossaryEntries) { entry in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(entry.input)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineLimit(2)
+                            Text(entry.output)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineLimit(2)
+                        }
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+
+                        Divider()
+                    }
+
+                    if filteredGlossaryEntries.isEmpty {
+                        Text("No terms")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(minHeight: 190)
+        }
+    }
+
+    private var glossaryTestPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Test phrase", text: $glossaryTestInput, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...4)
+
+            Divider()
+
+            Text(glossaryTestOutput)
+                .font(.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var logsWorkspace: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 18) {
+                    ControlPanel(title: "Current Session") {
+                        LabeledContent("Status", value: state.sessionLogStatus)
+                        LabeledContent("Segments", value: "\(state.sessionSegmentCount)")
+                        LabeledContent("Elapsed", value: state.sessionElapsedText)
+                    }
+                    .frame(width: 300)
+
+                    ControlPanel(title: "Session Folder") {
+                        if let path = state.sessionDirectoryPath {
+                            Text(path)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(5)
+                                .textSelection(.enabled)
+
+                            Button {
+                                state.openSessionFolder()
+                            } label: {
+                                Label("Open Folder", systemImage: "folder")
+                                    .frame(maxWidth: .infinity)
+                            }
+                        } else {
+                            Text("No active session folder")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                HStack(alignment: .top, spacing: 18) {
+                    ControlPanel(title: "Files") {
+                        logFileList
+                    }
+                    .frame(width: 300)
+
+                    ControlPanel(title: "Captured Captions") {
+                        captionHistoryList
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var logFileList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(sessionFileNames, id: \.self) { fileName in
+                Label(fileName, systemImage: "doc.text")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var modelsWorkspace: some View {
+        GeometryReader { proxy in
+            let useColumns = proxy.size.width >= 800
+            let readinessWidth = min(360, max(300, proxy.size.width * 0.34))
+
+            ScrollView {
+                Group {
+                    if useColumns {
+                        HStack(alignment: .top, spacing: 18) {
+                            modelSetupPanel
+                                .frame(maxWidth: .infinity)
+
+                            offlineReadinessPanel
+                                .frame(width: readinessWidth)
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 16) {
+                            modelSetupPanel
+                            offlineReadinessPanel
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    private var modelSetupPanel: some View {
+        ControlPanel(title: "WhisperKit Model") {
+            modelControls
+        }
+    }
+
+    private var offlineReadinessPanel: some View {
+        ControlPanel(title: "Offline Readiness") {
+            LabeledContent("Engine", value: state.transcriptionEngine.label)
+            LabeledContent("Model", value: state.whisperModelName)
+            LabeledContent("Status", value: state.modelStatus)
+            LabeledContent("Running", value: state.isRunning ? "Yes" : "No")
         }
     }
 
@@ -350,16 +663,34 @@ struct OperatorView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-            Text("Prepare the model before the event while online. Once cached, the WhisperKit engine can run without network access.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+    private var translationWorkspace: some View {
+        ScrollView {
+            HStack(alignment: .top, spacing: 18) {
+                ControlPanel(title: "Translation") {
+                    translationControls
+                }
+                .frame(width: 440)
+
+                ControlPanel(title: "Test Translation") {
+                    translationTestPanel
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
     private var translationControls: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Picker("Mode", selection: $state.mode) {
+                ForEach(ProcessingMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+
             Picker("Engine", selection: $state.translationEngine) {
                 ForEach(TranslationEngineChoice.allCases) { engine in
                     Text(engine.label).tag(engine)
@@ -373,38 +704,181 @@ struct OperatorView: View {
             TextField("Arguments", text: $state.translationCommandArguments)
                 .textFieldStyle(.roundedBorder)
                 .disabled(state.translationEngine != .localCommand)
-
-            Text("{source} and {target} are replaced with en/nl. Caption text is sent on stdin; stdout must contain the translated text.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private var liveWorkspace: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Output Preview")
-                    .font(.headline)
+    private var translationTestPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Test caption", text: $translationTestInput, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...5)
 
-                SubtitleOutputView()
-                    .environmentObject(state)
-                    .aspectRatio(16 / 9, contentMode: .fit)
-                    .frame(maxHeight: 430)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.secondary.opacity(0.25))
-                    }
-            }
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Source")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(translationPreviewSource)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
 
-            HStack(alignment: .top, spacing: 18) {
-                currentTranscript
-                history
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Display")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(translationPreviewDisplay)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
             }
-            .frame(maxHeight: .infinity)
         }
-        .padding(22)
+    }
+
+    private var audioWorkspace: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 18) {
+                    ControlPanel(title: "Input") {
+                        audioInputRow
+
+                        Button {
+                            state.refreshAudioInputDevice()
+                        } label: {
+                            Label("Refresh Input", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .frame(width: 360)
+
+                    ControlPanel(title: "Level") {
+                        AudioMeter(level: state.audioLevel)
+                            .frame(height: 22)
+
+                        LabeledContent("Level", value: "\(Int(state.audioLevel * 100))%")
+                        LabeledContent("Clipping", value: state.audioLevel > 0.92 ? "Yes" : "No")
+                    }
+                    .frame(width: 280)
+                }
+
+                ControlPanel(title: "Recording") {
+                    LabeledContent("Status", value: state.sessionLogStatus)
+                    LabeledContent("Segments", value: "\(state.sessionSegmentCount)")
+
+                    if let path = state.sessionDirectoryPath {
+                        Text(path)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: 660)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var outputWorkspace: some View {
+        GeometryReader { proxy in
+            let useColumns = proxy.size.width >= 900
+            let controlsWidth = min(380, max(330, proxy.size.width * 0.3))
+
+            ScrollView {
+                Group {
+                    if useColumns {
+                        HStack(alignment: .top, spacing: 18) {
+                            outputSetupColumn
+                                .frame(width: controlsWidth)
+
+                            outputPreviewColumn
+                                .frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 16) {
+                            outputPreviewColumn
+                            outputSetupColumn
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    private var outputSetupColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            outputWindowPanel
+            outputBackgroundPanel
+        }
+    }
+
+    private var outputPreviewColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            previewPanel(maxHeight: 430)
+            outputSignalPanel
+        }
+    }
+
+    private var outputWindowPanel: some View {
+        ControlPanel(title: "Output Window") {
+            Button {
+                state.showOutputWindow()
+            } label: {
+                Label("Show Output Window", systemImage: "rectangle.on.rectangle")
+                    .frame(maxWidth: .infinity)
+            }
+
+            Button {
+                state.fillExternalDisplay()
+            } label: {
+                Label("Fill Display", systemImage: "arrow.up.left.and.arrow.down.right")
+                    .frame(maxWidth: .infinity)
+            }
+
+            Button {
+                state.restoreOutputWindow()
+            } label: {
+                Label("Restore Window", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private var outputBackgroundPanel: some View {
+        ControlPanel(title: "Background") {
+            HStack(alignment: .top, spacing: 12) {
+                backgroundSwatch
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        state.useChromaGreen()
+                    } label: {
+                        Label("Chroma Green", systemImage: "wand.and.stars")
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    Button {
+                        state.useBlackBackground()
+                    } label: {
+                        Label("Black", systemImage: "rectangle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+        }
+    }
+
+    private var outputSignalPanel: some View {
+        ControlPanel(title: "Signal") {
+            HStack(alignment: .top, spacing: 18) {
+                LabeledContent("Position", value: state.captionPosition.label)
+                LabeledContent("Lines", value: "\(state.maxLines)")
+                LabeledContent("Safe margin", value: "\(Int(state.safeMargin))")
+            }
+        }
     }
 
     private var currentTranscript: some View {
@@ -431,32 +905,180 @@ struct OperatorView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private var history: some View {
+    private var historyPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("History")
                 .font(.headline)
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(state.history) { event in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(event.displayText)
-                                .font(.body)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(event.createdAt, style: .time)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Divider()
-                    }
-                }
-            }
+            captionHistoryList
         }
         .padding(16)
         .frame(width: 320)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var captionHistoryList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(state.history) { event in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(event.displayText)
+                            .font(.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(event.createdAt, style: .time)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Divider()
+                }
+
+                if state.history.isEmpty {
+                    Text("No captions yet.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func previewPanel(maxHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Output Preview")
+                .font(.headline)
+
+            SubtitleOutputView()
+                .environmentObject(state)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxHeight: maxHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.25))
+                }
+        }
+    }
+
+    private var backgroundSwatch: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(state.backgroundColor)
+            .frame(width: 96, height: 96)
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.secondary.opacity(0.3))
+            }
+    }
+
+    private var glossaryEntries: [GlossaryEntry] {
+        state.glossaryText
+            .split(whereSeparator: \.isNewline)
+            .compactMap { rawLine in
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty, !line.hasPrefix("#") else {
+                    return nil
+                }
+
+                if let separator = line.range(of: "=>") {
+                    let input = line[..<separator.lowerBound]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let output = line[separator.upperBound...]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    guard !input.isEmpty, !output.isEmpty else {
+                        return nil
+                    }
+
+                    return GlossaryEntry(input: String(input), output: String(output))
+                }
+
+                return GlossaryEntry(input: line, output: line)
+            }
+    }
+
+    private var filteredGlossaryEntries: [GlossaryEntry] {
+        let search = glossarySearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !search.isEmpty else {
+            return glossaryEntries
+        }
+
+        return glossaryEntries.filter { entry in
+            entry.input.localizedCaseInsensitiveContains(search) ||
+                entry.output.localizedCaseInsensitiveContains(search)
+        }
+    }
+
+    private var glossaryTestOutput: String {
+        GlossaryCorrector(rawGlossary: state.glossaryText).apply(to: glossaryTestInput)
+    }
+
+    private var translationPreviewSource: String {
+        GlossaryCorrector(rawGlossary: state.glossaryText).apply(to: translationTestInput)
+    }
+
+    private var translationPreviewDisplay: String {
+        let translated = RuleBasedTranslator().translate(translationPreviewSource, mode: state.mode)
+        return GlossaryCorrector(rawGlossary: state.glossaryText).apply(to: translated)
+    }
+
+    private var sessionFileNames: [String] {
+        [
+            "metadata.json",
+            "source-transcript.txt",
+            "display-transcript.txt",
+            "segments.jsonl",
+            "draft.srt",
+            "source.srt",
+            "display.srt",
+            "input-audio.caf"
+        ]
+    }
+}
+
+private enum OperatorWorkspace: String, CaseIterable, Identifiable {
+    case live
+    case style
+    case glossary
+    case logs
+    case models
+    case translation
+    case audio
+    case output
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .live: "Live"
+        case .style: "Style"
+        case .glossary: "Glossary"
+        case .logs: "Logs"
+        case .models: "Models"
+        case .translation: "Translation"
+        case .audio: "Audio"
+        case .output: "Output"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .live: "captions.bubble"
+        case .style: "textformat.size"
+        case .glossary: "list.bullet.rectangle"
+        case .logs: "folder"
+        case .models: "cpu"
+        case .translation: "arrow.left.arrow.right"
+        case .audio: "waveform"
+        case .output: "display"
+        }
+    }
+}
+
+private struct GlossaryEntry: Identifiable {
+    let input: String
+    let output: String
+
+    var id: String {
+        "\(input)=>\(output)"
     }
 }
 
@@ -471,6 +1093,7 @@ private struct ControlPanel<Content: View>: View {
             content
         }
         .padding(14)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }

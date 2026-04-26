@@ -10,11 +10,11 @@ enum TranscriptionEngineChoice: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .simulator:
-            "Simulator"
+            "Demo captions"
         case .whisperKit:
-            "WhisperKit"
+            "Live subtitles (WhisperKit)"
         case .audioOnly:
-            "Audio only"
+            "Record audio only"
         }
     }
 
@@ -26,6 +26,17 @@ enum TranscriptionEngineChoice: String, CaseIterable, Identifiable {
             "WhisperKit loading"
         case .audioOnly:
             "Audio recording only"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .simulator:
+            "Uses generated demo captions for testing the screen layout."
+        case .whisperKit:
+            "Transcribes the stage audio locally and shows live captions."
+        case .audioOnly:
+            "Records the session audio without creating live captions."
         }
     }
 }

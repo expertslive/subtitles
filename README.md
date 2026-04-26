@@ -1,6 +1,6 @@
 # EventSubtitles
 
-A native macOS prototype for offline live subtitles and Dutch/English translation at events.
+A native macOS app for offline live subtitles and Dutch/English translation at events.
 
 ## Documentation
 
@@ -13,12 +13,14 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 ## Features
 
 - operator screen for controls, glossary, audio level, and transcript history
+- persistent operator strip with full workspaces for Live, Style, Glossary, Logs, Models, Translation, Audio, and Output
 - second-window subtitle output with chroma green background
 - configurable font, size, colors, margins, and two/three-line layout
 - local pipeline interfaces for ASR and translation engines
-- selectable simulator/audio-only engines so the UI and recording workflow can be tested before WhisperKit/translation models are wired in
+- task-focused capture modes for demo captions, live WhisperKit subtitles, and audio-only recording
 - WhisperKit/Core ML live ASR engine path
 - timestamped session logging with transcripts, SRTs, JSONL segments, and raw input audio
+- generated macOS app icon bundled into `build/EventSubtitles.app`
 
 ## Run
 
@@ -26,7 +28,7 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 swift run EventSubtitles
 ```
 
-The app currently uses a simulated transcript engine plus real microphone/input level monitoring. Use a USB-C audio interface for event audio rather than the MacBook headphone jack.
+The app starts in a safe operator UI with a persistent left strip and workspaces on the right. Use the `Capture` picker to choose between demo captions, live local subtitles with WhisperKit, or audio-only recording. Use a USB-C audio interface for event audio rather than the MacBook headphone jack.
 
 For actual event use, build a macOS app bundle so microphone permissions are tied to the app:
 
@@ -40,6 +42,16 @@ To prepare a WhisperKit model from Terminal before going offline:
 ```bash
 swift run PrepareWhisperModel large-v3-v20240930_626MB
 ```
+
+## Download
+
+GitHub releases include a zipped macOS app bundle:
+
+```text
+EventSubtitles-v0.2.0-macos-arm64.zip
+```
+
+Unzip it and launch `EventSubtitles.app`. The app is ad-hoc signed for local testing, so macOS may require opening it from Finder with Control-click > Open the first time.
 
 Starting a session creates a timestamped folder under:
 
@@ -80,11 +92,11 @@ USB audio interface
   -> full-screen HDMI/chroma-key output
 ```
 
-The app includes a `WhisperKit` engine option. Use the Model tab to prepare/download a Core ML model before the event, while online. Once cached locally, the live path can run offline.
+The app includes a `Live subtitles (WhisperKit)` capture option. Use the Models workspace to prepare/download a Core ML model before the event, while online. Once cached locally, the live path can run offline.
 
 For translation, the app has two local paths:
 
 - `Glossary/rules`: deterministic fallback for demos and terminology protection.
 - `Local command`: calls an offline translator executable with text on stdin and reads translated text from stdout. The argument template supports `{source}` and `{target}` tokens such as `--from {source} --to {target}`.
 
-Parakeet v3 remains a benchmark candidate for ASR accuracy, but the runtime is currently optimized around Mac-native WhisperKit.
+The runtime is optimized around Mac-native WhisperKit on Apple Silicon.
