@@ -9,6 +9,12 @@ struct OperatorView: View {
     @State private var selectedWorkspace: OperatorWorkspace = .live
     @State private var glossarySearch = ""
     @State private var glossaryTestInput = "We deploy kubernetes with postgres and oauth on apple silicon."
+    @State private var glossaryNewInput = ""
+    @State private var glossaryNewOutput = ""
+    @State private var glossaryEditingID: Int?
+    @State private var glossaryEditingInput = ""
+    @State private var glossaryEditingOutput = ""
+    @State private var glossaryBulkEditorExpanded = false
     @State private var translationTestInput = "Welcome developers, this conference session is about cloud latency and security."
 
     var body: some View {
@@ -326,34 +332,73 @@ struct OperatorView: View {
     }
 
     private var styleWorkspace: some View {
-        ScrollView {
-            HStack(alignment: .top, spacing: 18) {
-                VStack(alignment: .leading, spacing: 16) {
-                    ControlPanel(title: "Typography") {
-                        typographyControls
-                    }
-
-                    ControlPanel(title: "Layout") {
-                        layoutControls
-                    }
-                }
-                .frame(width: 430)
-
-                VStack(alignment: .leading, spacing: 16) {
-                    previewPanel(maxHeight: 360)
-
-                    ControlPanel(title: "Color And Shadow") {
-                        colorControls
-                    }
-
-                    ControlPanel(title: "Presets") {
-                        stylePresetControls
-                    }
-                }
-                .frame(maxWidth: .infinity)
+        HStack(alignment: .top, spacing: 18) {
+            ScrollView {
+                styleControlsColumn
+                    .padding(.trailing, 2)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(width: 430)
+            .frame(maxHeight: .infinity)
+
+            ScrollView {
+                stylePreviewColumn
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var styleControlsColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ControlPanel(title: "Typography") {
+                typographyControls
+            }
+
+            ControlPanel(title: "Layout") {
+                layoutControls
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var stylePreviewColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            previewPanel(maxHeight: 360)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 18) {
+                    styleVisualControlsColumn
+                        .frame(width: 360)
+
+                    ControlPanel(title: "Display Flow") {
+                        displayFlowControls
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    styleVisualControlsColumn
+
+                    ControlPanel(title: "Display Flow") {
+                        displayFlowControls
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var styleVisualControlsColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ControlPanel(title: "Color And Shadow") {
+                colorControls
+            }
+
+            ControlPanel(title: "Presets") {
+                stylePresetControls
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var typographyControls: some View {
@@ -408,6 +453,62 @@ struct OperatorView: View {
             .pickerStyle(.segmented)
 
             captionFinePositionControls
+        }
+    }
+
+    private var displayFlowControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker(
+                "Mode",
+                selection: Binding(
+                    get: { state.captionDisplayMode },
+                    set: { state.setCaptionDisplayMode($0) }
+                )
+            ) {
+                ForEach(CaptionDisplayMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+
+            Text(state.captionDisplayMode.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker(
+                "Stability",
+                selection: Binding(
+                    get: { state.captionStabilityLevel },
+                    set: { state.setCaptionStabilityLevel($0) }
+                )
+            ) {
+                ForEach(CaptionStabilityLevel.allCases) { level in
+                    Text(level.label).tag(level)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            TimeSliderRow(title: "Commit delay", value: $state.captionCommitDelay, range: 0.3...2.0)
+            TimeSliderRow(title: "Minimum hold", value: $state.captionMinimumHold, range: 0.8...3.0)
+            TimeSliderRow(title: "Max latency", value: $state.captionMaximumLatency, range: 1.5...5.0)
+
+            Stepper(
+                "Hidden unstable words: \(state.captionUnstableWordCount)",
+                value: $state.captionUnstableWordCount,
+                in: 0...6,
+                step: 1
+            )
+
+            HStack {
+                LabeledContent("Queue", value: state.stableCaptionQueueText.isEmpty ? "Empty" : state.captionDisplayLatencyText)
+                Spacer()
+                Button {
+                    state.saveSettings()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+            }
+            .font(.caption)
         }
     }
 
@@ -597,38 +698,93 @@ struct OperatorView: View {
     }
 
     private var glossaryEditorPanel: some View {
-        ControlPanel(title: "Glossary Editor") {
-            TextEditor(text: $state.glossaryText)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 420)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.25))
+        ControlPanel(title: "Glossary Terms") {
+            VStack(alignment: .leading, spacing: 12) {
+                glossaryAddTermControls
+
+                Divider()
+
+                glossaryEditableTable
+
+                Divider()
+
+                DisclosureGroup("Advanced bulk edit", isExpanded: $glossaryBulkEditorExpanded) {
+                    TextEditor(text: $state.glossaryText)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minHeight: 180)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.25))
+                        }
                 }
+            }
         }
     }
 
     private var glossaryToolsPanel: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ControlPanel(title: "Term Table") {
-                glossaryTable
+            ControlPanel(title: "Quality") {
+                glossaryQualityPanel
+            }
+
+            ControlPanel(title: "Alias Groups") {
+                glossaryAliasPanel
             }
 
             ControlPanel(title: "Test Phrase") {
                 glossaryTestPanel
             }
+
+            ControlPanel(title: "Session Suggestions") {
+                glossarySuggestionsPanel
+            }
         }
     }
 
-    private var glossaryTable: some View {
+    private var glossaryAddTermControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("Heard as")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Show as")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("")
+                    .frame(width: 88)
+            }
+
+            HStack(spacing: 10) {
+                TextField("postgres", text: $glossaryNewInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                TextField("PostgreSQL", text: $glossaryNewOutput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                Button {
+                    addGlossaryEntry()
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .disabled(glossaryNewInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .frame(width: 88, alignment: .trailing)
+            }
+        }
+    }
+
+    private var glossaryEditableTable: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Input")
+                Text("Heard as")
                     .font(.caption.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text("Output")
+                Text("Show as")
                     .font(.caption.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
+                Text("")
+                    .frame(width: 88)
             }
             .foregroundStyle(.secondary)
 
@@ -637,16 +793,7 @@ struct OperatorView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(filteredGlossaryEntries) { entry in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text(entry.input)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .lineLimit(2)
-                            Text(entry.output)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .lineLimit(2)
-                        }
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
+                        glossaryEntryRow(entry)
 
                         Divider()
                     }
@@ -657,7 +804,126 @@ struct OperatorView: View {
                     }
                 }
             }
-            .frame(minHeight: 190)
+            .frame(minHeight: 360)
+        }
+    }
+
+    private func glossaryEntryRow(_ entry: GlossaryEntry) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            if glossaryEditingID == entry.id {
+                TextField("Heard as", text: $glossaryEditingInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.caption, design: .monospaced))
+
+                TextField("Show as", text: $glossaryEditingOutput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.caption, design: .monospaced))
+
+                HStack(spacing: 4) {
+                    Button {
+                        commitGlossaryEdit(entry)
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .frame(width: 24, height: 24)
+                    }
+                    .disabled(glossaryEditingInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Save term")
+
+                    Button {
+                        cancelGlossaryEdit()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 24, height: 24)
+                    }
+                    .help("Cancel")
+                }
+                .buttonStyle(.borderless)
+                .frame(width: 88, alignment: .trailing)
+            } else {
+                Text(entry.input)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(2)
+                Text(entry.output)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(2)
+
+                HStack(spacing: 4) {
+                    Button {
+                        startGlossaryEdit(entry)
+                    } label: {
+                        Image(systemName: "pencil")
+                            .frame(width: 24, height: 24)
+                    }
+                    .help("Edit term")
+
+                    Button {
+                        deleteGlossaryEntry(entry)
+                    } label: {
+                        Image(systemName: "trash")
+                            .frame(width: 24, height: 24)
+                    }
+                    .help("Delete term")
+                }
+                .buttonStyle(.borderless)
+                .frame(width: 88, alignment: .trailing)
+            }
+        }
+        .font(.system(.caption, design: .monospaced))
+        .textSelection(.enabled)
+    }
+
+    private var glossaryQualityPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Label("\(glossaryEntries.count) terms", systemImage: "list.bullet")
+                Label("\(glossaryAliasGroups.count) alias groups", systemImage: "link")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Divider()
+
+            if glossaryValidationIssues.isEmpty {
+                Label("No glossary conflicts", systemImage: "checkmark.circle")
+                    .foregroundStyle(.green)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(glossaryValidationIssues) { issue in
+                        Label(issue.message, systemImage: issue.systemImage)
+                            .foregroundStyle(issue.tint)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .font(.caption)
+            }
+        }
+    }
+
+    private var glossaryAliasPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if glossaryAliasGroups.isEmpty {
+                Text("No aliases yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(glossaryAliasGroups) { group in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(group.output)
+                                    .font(.caption.weight(.semibold))
+
+                                Text(group.inputs.joined(separator: ", "))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 170)
+            }
         }
     }
 
@@ -673,6 +939,36 @@ struct OperatorView: View {
                 .font(.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
+        }
+    }
+
+    private var glossarySuggestionsPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if glossarySuggestions.isEmpty {
+                Text("No session suggestions yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(glossarySuggestions) { suggestion in
+                    HStack {
+                        Text(suggestion.term)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                        Spacer()
+                        Text("\(suggestion.count)x")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            glossaryNewInput = suggestion.term
+                            glossaryNewOutput = suggestion.term
+                        } label: {
+                            Image(systemName: "plus")
+                                .frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Use as new glossary term")
+                    }
+                }
+            }
         }
     }
 
@@ -1081,21 +1377,51 @@ struct OperatorView: View {
     }
 
     private var currentTranscript: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Current")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Current")
+                    .font(.headline)
+                Spacer()
+                Text(state.captionDisplayMode.label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
-            Text(state.currentEvent?.sourceText ?? "No transcript yet.")
-                .font(.title3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Draft")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(state.draftEvent?.sourceText ?? "No transcript yet.")
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(.primary)
+            }
 
-            if state.mode != .subtitlesOnly {
-                Divider()
-                Text(state.currentEvent?.displayText ?? "")
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Public")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(state.publicCaptionText.isEmpty ? "No public caption yet." : state.publicCaptionText)
                     .font(.title3)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
+            }
+
+            if !state.stableCaptionQueueText.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Queued stable text")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(state.stableCaptionQueueText)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                    Text("Latency \(state.captionDisplayLatencyText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(16)
@@ -1168,30 +1494,17 @@ struct OperatorView: View {
             }
     }
 
+    private var glossaryRawLines: [String] {
+        guard !state.glossaryText.isEmpty else {
+            return []
+        }
+        return state.glossaryText.components(separatedBy: .newlines)
+    }
+
     private var glossaryEntries: [GlossaryEntry] {
-        state.glossaryText
-            .split(whereSeparator: \.isNewline)
-            .compactMap { rawLine in
-                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !line.isEmpty, !line.hasPrefix("#") else {
-                    return nil
-                }
-
-                if let separator = line.range(of: "=>") {
-                    let input = line[..<separator.lowerBound]
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let output = line[separator.upperBound...]
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-
-                    guard !input.isEmpty, !output.isEmpty else {
-                        return nil
-                    }
-
-                    return GlossaryEntry(input: String(input), output: String(output))
-                }
-
-                return GlossaryEntry(input: line, output: line)
-            }
+        glossaryRawLines.enumerated().compactMap { index, rawLine in
+            parseGlossaryLine(rawLine, lineIndex: index)
+        }
     }
 
     private var filteredGlossaryEntries: [GlossaryEntry] {
@@ -1204,6 +1517,125 @@ struct OperatorView: View {
             entry.input.localizedCaseInsensitiveContains(search) ||
                 entry.output.localizedCaseInsensitiveContains(search)
         }
+    }
+
+    private var glossaryAliasGroups: [GlossaryAliasGroup] {
+        Dictionary(grouping: glossaryEntries, by: { normalizedGlossaryKey($0.output) })
+            .compactMap { _, entries in
+                let inputs = Array(Set(entries.map(\.input))).sorted {
+                    $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+                }
+                guard inputs.count > 1, let output = entries.first?.output else {
+                    return nil
+                }
+                return GlossaryAliasGroup(output: output, inputs: inputs)
+            }
+            .sorted { $0.output.localizedCaseInsensitiveCompare($1.output) == .orderedAscending }
+    }
+
+    private var glossaryValidationIssues: [GlossaryValidationIssue] {
+        var issues: [GlossaryValidationIssue] = []
+
+        for (index, rawLine) in glossaryRawLines.enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, !line.hasPrefix("#"), let separator = line.range(of: "=>") else {
+                continue
+            }
+
+            let input = line[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            let output = line[separator.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if input.isEmpty || output.isEmpty {
+                issues.append(
+                    GlossaryValidationIssue(
+                        severity: .warning,
+                        message: "Line \(index + 1) has an empty side"
+                    )
+                )
+            }
+        }
+
+        let groupedByInput = Dictionary(grouping: glossaryEntries) {
+            normalizedGlossaryKey($0.input)
+        }
+
+        for (_, entries) in groupedByInput {
+            let outputKeys = Set(entries.map { normalizedGlossaryKey($0.output) })
+            if outputKeys.count > 1, let input = entries.first?.input {
+                let outputs = Array(Set(entries.map(\.output))).sorted {
+                    $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+                }
+                issues.append(
+                    GlossaryValidationIssue(
+                        severity: .warning,
+                        message: "\(input) maps to \(outputs.joined(separator: " / "))"
+                    )
+                )
+                continue
+            }
+
+            let pairKeys = entries.map {
+                "\(normalizedGlossaryKey($0.input))=>\(normalizedGlossaryKey($0.output))"
+            }
+            if Set(pairKeys).count < pairKeys.count, let input = entries.first?.input {
+                issues.append(
+                    GlossaryValidationIssue(
+                        severity: .info,
+                        message: "\(input) appears more than once"
+                    )
+                )
+            }
+        }
+
+        return issues
+    }
+
+    private var glossarySuggestions: [GlossarySuggestion] {
+        let knownTerms = Set(glossaryEntries.flatMap {
+            [normalizedGlossaryKey($0.input), normalizedGlossaryKey($0.output)]
+        })
+        let commonWords = commonGlossarySuggestionWords
+        let transcriptText = ([state.draftEvent?.sourceText, state.currentEvent?.sourceText, state.publicCaptionText]
+            .compactMap { $0 } + state.history.flatMap { [$0.sourceText, $0.displayText] })
+            .joined(separator: " ")
+        let tokens = transcriptText
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { token in
+                let key = normalizedGlossaryKey(token)
+                return token.count >= 5 &&
+                    !key.isEmpty &&
+                    !knownTerms.contains(key) &&
+                    !commonWords.contains(key)
+            }
+
+        let counts = Dictionary(tokens.map { (normalizedGlossaryKey($0), $0) }, uniquingKeysWith: { first, _ in first })
+        let frequencies = Dictionary(grouping: tokens, by: normalizedGlossaryKey).mapValues(\.count)
+
+        return frequencies
+            .compactMap { key, count in
+                guard let term = counts[key] else {
+                    return nil
+                }
+                return GlossarySuggestion(term: term, count: count)
+            }
+            .sorted {
+                if $0.count == $1.count {
+                    return $0.term.localizedCaseInsensitiveCompare($1.term) == .orderedAscending
+                }
+                return $0.count > $1.count
+            }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    private var commonGlossarySuggestionWords: Set<String> {
+        [
+            "about", "after", "again", "alleen", "already", "andere", "because", "before",
+            "comes", "could", "daarom", "deze", "doing", "english", "event", "going",
+            "heeft", "hello", "komen", "later", "maybe", "moeten", "onder", "other",
+            "right", "screen", "session", "shown", "staat", "terms", "there", "these",
+            "thing", "think", "through", "vandaag", "wacht", "waarom", "words", "would"
+        ]
     }
 
     private var glossaryTestOutput: String {
@@ -1230,6 +1662,100 @@ struct OperatorView: View {
             "display.srt",
             "input-audio.caf"
         ]
+    }
+
+    private func parseGlossaryLine(_ rawLine: String, lineIndex: Int) -> GlossaryEntry? {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty, !line.hasPrefix("#") else {
+            return nil
+        }
+
+        if let separator = line.range(of: "=>") {
+            let input = line[..<separator.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let output = line[separator.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !input.isEmpty, !output.isEmpty else {
+                return nil
+            }
+
+            return GlossaryEntry(lineIndex: lineIndex, input: String(input), output: String(output))
+        }
+
+        return GlossaryEntry(lineIndex: lineIndex, input: line, output: line)
+    }
+
+    private func addGlossaryEntry() {
+        guard let line = formattedGlossaryLine(input: glossaryNewInput, output: glossaryNewOutput) else {
+            return
+        }
+
+        var lines = glossaryRawLines
+        while lines.last?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            lines.removeLast()
+        }
+        lines.append(line)
+        writeGlossaryLines(lines)
+        glossaryNewInput = ""
+        glossaryNewOutput = ""
+    }
+
+    private func startGlossaryEdit(_ entry: GlossaryEntry) {
+        glossaryEditingID = entry.id
+        glossaryEditingInput = entry.input
+        glossaryEditingOutput = entry.output
+    }
+
+    private func commitGlossaryEdit(_ entry: GlossaryEntry) {
+        guard let line = formattedGlossaryLine(input: glossaryEditingInput, output: glossaryEditingOutput) else {
+            return
+        }
+
+        var lines = glossaryRawLines
+        guard lines.indices.contains(entry.lineIndex) else {
+            return
+        }
+        lines[entry.lineIndex] = line
+        writeGlossaryLines(lines)
+        cancelGlossaryEdit()
+    }
+
+    private func cancelGlossaryEdit() {
+        glossaryEditingID = nil
+        glossaryEditingInput = ""
+        glossaryEditingOutput = ""
+    }
+
+    private func deleteGlossaryEntry(_ entry: GlossaryEntry) {
+        var lines = glossaryRawLines
+        guard lines.indices.contains(entry.lineIndex) else {
+            return
+        }
+        lines.remove(at: entry.lineIndex)
+        writeGlossaryLines(lines)
+        cancelGlossaryEdit()
+    }
+
+    private func formattedGlossaryLine(input: String, output: String) -> String? {
+        let cleanedInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedInput.isEmpty else {
+            return nil
+        }
+
+        return "\(cleanedInput) => \(cleanedOutput.isEmpty ? cleanedInput : cleanedOutput)"
+    }
+
+    private func writeGlossaryLines(_ lines: [String]) {
+        state.glossaryText = lines.joined(separator: "\n")
+    }
+
+    private func normalizedGlossaryKey(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 }
 
@@ -1273,12 +1799,51 @@ private enum OperatorWorkspace: String, CaseIterable, Identifiable {
 }
 
 private struct GlossaryEntry: Identifiable {
+    let lineIndex: Int
     let input: String
     let output: String
 
-    var id: String {
-        "\(input)=>\(output)"
+    var id: Int { lineIndex }
+}
+
+private struct GlossaryAliasGroup: Identifiable {
+    let output: String
+    let inputs: [String]
+
+    var id: String { output }
+}
+
+private struct GlossarySuggestion: Identifiable {
+    let term: String
+    let count: Int
+
+    var id: String { term }
+}
+
+private struct GlossaryValidationIssue: Identifiable {
+    let severity: GlossaryValidationSeverity
+    let message: String
+
+    var id: String { "\(severity)-\(message)" }
+
+    var systemImage: String {
+        switch severity {
+        case .warning: "exclamationmark.triangle"
+        case .info: "info.circle"
+        }
     }
+
+    var tint: Color {
+        switch severity {
+        case .warning: .orange
+        case .info: .secondary
+        }
+    }
+}
+
+private enum GlossaryValidationSeverity {
+    case warning
+    case info
 }
 
 private struct ControlPanel<Content: View>: View {
@@ -1313,6 +1878,25 @@ private struct SliderRow: View {
                     .foregroundStyle(.secondary)
             }
             Slider(value: $value, in: range, step: step)
+        }
+    }
+}
+
+private struct TimeSliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(value, specifier: "%.1f")s")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Slider(value: $value, in: range, step: 0.1)
         }
     }
 }

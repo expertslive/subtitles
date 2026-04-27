@@ -23,7 +23,8 @@ Implemented:
 - Right-side workspace selector with subtle button surfaces and borders.
 - Live workspace with output preview, current caption, and a full-height history column.
 - Style workspace with grouped typography, layout, color, shadow, presets, fine X/Y positioning, and preview.
-- Glossary workspace with editor, search, term table, test phrase, JSON import/export, and CSV import/export.
+- Style workspace display-flow controls for Calm Blocks, Live Roll-up, Fast Draft, stability, commit delay, hold time, latency, and hidden unstable words.
+- Glossary workspace with row editing, search, add/edit/delete, alias groups, quality checks, session suggestions, advanced bulk edit, test phrase, JSON import/export, and CSV import/export.
 - Logs workspace with current session status, expected files, and captured captions.
 - Models workspace with model preparation, offline readiness, prepare guidance, and resource checks.
 - Translation workspace with translation settings and test source/display preview.
@@ -36,12 +37,13 @@ Implemented:
 
 Still future work:
 
-- Structured glossary storage.
+- Richer glossary metadata.
 - Browsing previous session folders.
 - Regenerating SRT files from the Logs workspace.
 - Audio input selection from inside the app.
 - Display selection and output test cards.
 - Audio storage estimator in Audio or Logs.
+- More advanced calm-caption heuristics using word timestamps or confidence if WhisperKit exposes enough data.
 
 ## Always-Visible Operator Strip
 
@@ -84,6 +86,8 @@ Useful areas:
 - Current caption.
 - Caption history.
 - Confidence, latency, and engine status.
+- Draft ASR text versus stable public output.
+- Stable caption queue and estimated display latency.
 - Quick correction of the last caption.
 - Manual caption input.
 - Event-safe controls only.
@@ -105,6 +109,7 @@ Useful areas:
 - Shadow controls.
 - Chroma/background controls.
 - Style presets.
+- Display flow controls for Calm Blocks, Live Roll-up, and Fast Draft.
 - Test phrases for short, long, and technical captions.
 
 Possible presets:
@@ -124,15 +129,16 @@ The output preview should not be shown by default here. This workspace needs roo
 
 Useful areas:
 
-- Glossary table.
+- Glossary table with inline row editing.
 - Search and filtering.
 - Add/edit/delete terms.
+- Alias groups and validation for duplicate/conflicting mappings.
 - Import and export CSV or JSON.
 - Test phrase input.
 - Correction preview showing before/after text.
 - Term enable/disable.
 - Session or event-specific glossary presets.
-- Suggestions mined from previous logs.
+- Suggestions mined from current and previous logs.
 
 Possible glossary fields:
 

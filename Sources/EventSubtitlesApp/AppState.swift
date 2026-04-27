@@ -30,6 +30,7 @@ final class AppState: ObservableObject {
     @Published var translationCommandArguments = "--from {source} --to {target}"
 
     @Published var currentEvent: TranscriptEvent?
+    @Published var publicCaptionText = "Ready"
     @Published var captionLayout = CaptionLayout(lines: ["Ready"])
     @Published var history: [TranscriptEvent] = []
 
@@ -52,6 +53,15 @@ final class AppState: ObservableObject {
     @Published var captionPosition: CaptionVerticalPosition = .bottom
     @Published var captionOffsetX = 0.0
     @Published var captionOffsetY = 0.0
+    @Published var captionDisplayMode: CaptionDisplayMode = .calmBlocks
+    @Published var captionStabilityLevel: CaptionStabilityLevel = .calm
+    @Published var captionCommitDelay = CaptionStabilityLevel.calm.defaultCommitDelay
+    @Published var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
+    @Published var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
+    @Published var captionMaximumLatency = 3.0
+    @Published var draftEvent: TranscriptEvent?
+    @Published var stableCaptionQueueText = ""
+    @Published var captionDisplayLatencyText = "0.0s"
 
     @Published var glossaryText = """
     kubernetes => Kubernetes
@@ -80,9 +90,13 @@ final class AppState: ObservableObject {
     private let sessionRecorder = SessionRecorder()
     private let settingsStore = AppSettingsStore()
     private let sleepPreventer = SleepPreventer()
+    private var captionStabilityEngine = CaptionStabilityEngine()
+    private var captionDisplayScheduler = CaptionDisplayScheduler()
     private var outputController: OutputWindowController?
     private var sessionStartedAt: Date?
     private var sessionTimer: Timer?
+    private var captionDisplayTimer: Timer?
+    private var lastDetectedLanguageForDisplay: SourceLanguage?
 
     init() {
         loadSettings()
@@ -100,9 +114,11 @@ final class AppState: ObservableObject {
         errorMessage = nil
         saveSettings()
         engineStatus = transcriptionEngine.statusLabel
+        resetCaptionDisplayPipeline(clearOutput: true)
         startSleepPreventionIfNeeded()
         startSessionLog()
         startSessionTimer()
+        startCaptionDisplayTimer()
         refreshResourceUsage()
 
         Task { @MainActor [weak self] in
@@ -137,6 +153,8 @@ final class AppState: ObservableObject {
         audioLevel = 0
         isRunning = false
         engineStatus = transcriptionEngine.idleStatusLabel
+        publishNextCaptionCue(force: true)
+        stopCaptionDisplayTimer()
         stopSleepPrevention()
         stopSessionTimer()
         stopSessionLog()
@@ -155,7 +173,10 @@ final class AppState: ObservableObject {
 
     func clearCaptions() {
         currentEvent = nil
+        draftEvent = nil
+        publicCaptionText = ""
         captionLayout = CaptionLayout(lines: [])
+        resetCaptionDisplayPipeline(clearOutput: false)
     }
 
     func showOutputWindow() {
@@ -205,6 +226,17 @@ final class AppState: ObservableObject {
         byteCountString(ProcessInfo.processInfo.physicalMemory)
     }
 
+    var captionDisplayConfiguration: CaptionDisplayConfiguration {
+        CaptionDisplayConfiguration(
+            mode: captionDisplayMode,
+            stability: captionStabilityLevel,
+            commitDelay: captionCommitDelay,
+            unstableWordCount: captionUnstableWordCount,
+            minimumHold: captionMinimumHold,
+            maximumLatency: captionMaximumLatency
+        )
+    }
+
     func refreshResourceUsage() {
         appMemoryUsageText = currentResidentMemoryText()
     }
@@ -227,6 +259,21 @@ final class AppState: ObservableObject {
         } else {
             updateSleepPreventionStatusForIdle()
         }
+    }
+
+    func setCaptionDisplayMode(_ mode: CaptionDisplayMode) {
+        captionDisplayMode = mode
+        resetCaptionDisplayPipeline(clearOutput: false)
+        saveSettings()
+    }
+
+    func setCaptionStabilityLevel(_ level: CaptionStabilityLevel) {
+        captionStabilityLevel = level
+        captionCommitDelay = level.defaultCommitDelay
+        captionUnstableWordCount = level.defaultUnstableWordCount
+        captionMinimumHold = level.defaultMinimumHold
+        resetCaptionDisplayPipeline(clearOutput: false)
+        saveSettings()
     }
 
     func saveSettings() {
@@ -254,7 +301,13 @@ final class AppState: ObservableObject {
                 captionPosition: captionPosition.rawValue,
                 captionOffsetX: captionOffsetX,
                 captionOffsetY: captionOffsetY,
-                keepMacAwakeDuringSession: keepMacAwakeDuringSession
+                keepMacAwakeDuringSession: keepMacAwakeDuringSession,
+                captionDisplayMode: captionDisplayMode,
+                captionStabilityLevel: captionStabilityLevel,
+                captionCommitDelay: captionCommitDelay,
+                captionUnstableWordCount: captionUnstableWordCount,
+                captionMinimumHold: captionMinimumHold,
+                captionMaximumLatency: captionMaximumLatency
             )
         )
     }
@@ -321,6 +374,12 @@ final class AppState: ObservableObject {
         captionOffsetX = settings.captionOffsetX ?? 0
         captionOffsetY = settings.captionOffsetY ?? 0
         keepMacAwakeDuringSession = settings.keepMacAwakeDuringSession ?? true
+        captionDisplayMode = settings.captionDisplayMode ?? .calmBlocks
+        captionStabilityLevel = settings.captionStabilityLevel ?? .calm
+        captionCommitDelay = settings.captionCommitDelay ?? captionStabilityLevel.defaultCommitDelay
+        captionUnstableWordCount = settings.captionUnstableWordCount ?? captionStabilityLevel.defaultUnstableWordCount
+        captionMinimumHold = settings.captionMinimumHold ?? captionStabilityLevel.defaultMinimumHold
+        captionMaximumLatency = settings.captionMaximumLatency ?? 3.0
     }
 
     private func exportGlossary(format: GlossaryExportFormat) {
@@ -606,7 +665,11 @@ final class AppState: ObservableObject {
                     targetCharactersPerLine: targetCharactersPerLine,
                     safeMargin: safeMargin,
                     lineSpacing: lineSpacing,
-                    captionPosition: captionPosition.rawValue
+                    captionPosition: captionPosition.rawValue,
+                    displayMode: captionDisplayMode.rawValue,
+                    stability: captionStabilityLevel.rawValue,
+                    commitDelay: captionCommitDelay,
+                    minimumHold: captionMinimumHold
                 ),
                 mode: mode,
                 sourceLanguage: sourceLanguage,
@@ -651,6 +714,20 @@ final class AppState: ObservableObject {
         sessionTimer?.invalidate()
         sessionTimer = nil
         updateSessionElapsed()
+    }
+
+    private func startCaptionDisplayTimer() {
+        captionDisplayTimer?.invalidate()
+        captionDisplayTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.publishNextCaptionCue()
+            }
+        }
+    }
+
+    private func stopCaptionDisplayTimer() {
+        captionDisplayTimer?.invalidate()
+        captionDisplayTimer = nil
     }
 
     private func updateSessionElapsed() {
@@ -715,7 +792,8 @@ final class AppState: ObservableObject {
             }
         case .audioOnly:
             currentEvent = nil
-            captionLayout = CaptionLayout(lines: ["Recording audio"])
+            publicCaptionText = "Recording audio"
+            recomputeCaption()
         }
     }
 
@@ -754,11 +832,66 @@ final class AppState: ObservableObject {
         startedAt: Date? = nil,
         endedAt: Date? = nil
     ) async {
+        let now = Date()
         let corrector = GlossaryCorrector(rawGlossary: glossaryText)
-        let source = corrector.apply(to: text)
+        let draftSource = corrector.apply(to: text)
+        let draftEvent = TranscriptEvent(
+            sourceText: draftSource,
+            displayText: draftSource,
+            isFinal: isFinal,
+            createdAt: now,
+            startedAt: startedAt,
+            endedAt: endedAt
+        )
+        self.draftEvent = draftEvent
+        lastDetectedLanguageForDisplay = detectedLanguage ?? sourceLanguage
+
+        if captionDisplayMode == .fastDraft {
+            await publishFastDraft(
+                draftSource,
+                isFinal: isFinal,
+                detectedLanguage: detectedLanguage,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                corrector: corrector
+            )
+            return
+        }
+
+        if mode != .subtitlesOnly, !isFinal {
+            updateCaptionSchedulerStatus()
+            return
+        }
+
+        let phrases = captionStabilityEngine.ingest(
+            TranscriptSnapshot(text: text, createdAt: now, isFinal: isFinal),
+            configuration: captionDisplayConfiguration
+        )
+
+        for phrase in phrases {
+            let stableSource = corrector.apply(to: phrase.text)
+            let translated = await translate(stableSource, isFinal: true)
+            let display = corrector.apply(to: translated)
+            captionDisplayScheduler.enqueue(
+                sourceText: stableSource,
+                displayText: display,
+                now: phrase.committedAt
+            )
+        }
+
+        publishNextCaptionCue(force: isFinal)
+    }
+
+    private func publishFastDraft(
+        _ source: String,
+        isFinal: Bool,
+        detectedLanguage: SourceLanguage? = nil,
+        startedAt: Date? = nil,
+        endedAt: Date? = nil,
+        corrector: GlossaryCorrector
+    ) async {
         let translated = await translate(source, isFinal: isFinal)
         let display = corrector.apply(to: translated)
-
         let event = TranscriptEvent(
             sourceText: source,
             displayText: display,
@@ -768,26 +901,93 @@ final class AppState: ObservableObject {
         )
 
         currentEvent = event
+        publicCaptionText = display
         recomputeCaption()
 
         if isFinal {
-            history.insert(event, at: 0)
-            if history.count > 50 {
-                history.removeLast(history.count - 50)
-            }
-
-            do {
-                try sessionRecorder.record(
-                    event: event,
-                    mode: mode,
-                    sourceLanguage: detectedLanguage ?? sourceLanguage
-                )
-                sessionSegmentCount = sessionRecorder.segmentCount
-            } catch {
-                sessionLogStatus = "Save failed"
-                errorMessage = "Session log save failed: \(error.localizedDescription)"
-            }
+            recordDisplayedEvent(event, detectedLanguage: detectedLanguage)
         }
+    }
+
+    private func publishNextCaptionCue(force: Bool = false) {
+        guard let cue = captionDisplayScheduler.nextCueIfDue(
+            configuration: captionDisplayConfiguration,
+            force: force
+        ) else {
+            updateCaptionSchedulerStatus()
+            return
+        }
+
+        let event = TranscriptEvent(
+            sourceText: cue.sourceText,
+            displayText: cue.displayText,
+            isFinal: true,
+            createdAt: cue.startsAt,
+            startedAt: nil,
+            endedAt: nil
+        )
+
+        currentEvent = event
+        switch captionDisplayMode {
+        case .calmBlocks, .fastDraft:
+            publicCaptionText = cue.displayText
+            recomputeCaption()
+        case .liveRollUp:
+            let rollingText = [captionLayout.text, cue.displayText]
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .joined(separator: " ")
+            publicCaptionText = rollingText
+            let composer = CaptionComposer(
+                maxLines: maxLines,
+                targetCharactersPerLine: targetCharactersPerLine
+            )
+            captionLayout = composer.compose(rollingText)
+        }
+
+        recordDisplayedEvent(event, detectedLanguage: lastDetectedLanguageForDisplay)
+        updateCaptionSchedulerStatus()
+    }
+
+    private func recordDisplayedEvent(
+        _ event: TranscriptEvent,
+        detectedLanguage: SourceLanguage? = nil
+    ) {
+        history.insert(event, at: 0)
+        if history.count > 50 {
+            history.removeLast(history.count - 50)
+        }
+
+        do {
+            try sessionRecorder.record(
+                event: event,
+                mode: mode,
+                sourceLanguage: detectedLanguage ?? sourceLanguage
+            )
+            sessionSegmentCount = sessionRecorder.segmentCount
+        } catch {
+            sessionLogStatus = "Save failed"
+            errorMessage = "Session log save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func resetCaptionDisplayPipeline(clearOutput: Bool) {
+        captionStabilityEngine.reset()
+        captionDisplayScheduler.reset()
+        stableCaptionQueueText = ""
+        captionDisplayLatencyText = "0.0s"
+        lastDetectedLanguageForDisplay = nil
+
+        if clearOutput {
+            currentEvent = nil
+            draftEvent = nil
+            publicCaptionText = "Ready"
+            captionLayout = CaptionLayout(lines: ["Ready"])
+        }
+    }
+
+    private func updateCaptionSchedulerStatus() {
+        stableCaptionQueueText = captionDisplayScheduler.pendingDisplayText
+        captionDisplayLatencyText = captionDisplayScheduler.estimatedLatencyText()
     }
 
     private func translate(_ source: String, isFinal: Bool) async -> String {
@@ -822,7 +1022,7 @@ final class AppState: ObservableObject {
             maxLines: maxLines,
             targetCharactersPerLine: targetCharactersPerLine
         )
-        captionLayout = composer.compose(currentEvent?.displayText ?? "")
+        captionLayout = composer.compose(publicCaptionText)
     }
 }
 

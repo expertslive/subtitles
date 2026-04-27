@@ -4,11 +4,12 @@
 
 1. Capture audio from the selected macOS input device.
 2. Feed audio frames into a local speech recognizer.
-3. Stabilize partial transcript chunks before showing them.
-4. Apply glossary corrections for technical terms and names.
-5. Optionally translate stable chunks between English and Dutch.
-6. Compose readable two- or three-line captions.
-7. Render the output window on the external HDMI display.
+3. Keep raw partial transcript chunks in an operator-only draft buffer.
+4. Stabilize partial transcript chunks before public display.
+5. Apply glossary corrections for technical terms and names.
+6. Optionally translate stable chunks between English and Dutch.
+7. Schedule readable two- or three-line caption cues.
+8. Render stable scheduled cues on the external HDMI display.
 
 ## Operator UI
 
@@ -20,7 +21,7 @@ The right side is split into task-focused workspaces:
 
 - Live: output preview, current caption, and a full-height history column for event operation.
 - Style: visual tuning with live preview, smaller font sizes, line-width control, and fine X/Y position nudging.
-- Glossary: full-width glossary editor, term table, search, test phrase, and JSON/CSV import/export.
+- Glossary: full-width term editor, search, inline add/edit/delete, alias groups, quality checks, test phrase, session suggestions, advanced bulk edit, and JSON/CSV import/export.
 - Logs: current session status, expected files, and captured caption history.
 - Models: WhisperKit model selection, preparation, offline readiness status, prepare guidance, and resource checks.
 - Translation: translation mode, engine settings, and test input/output.
@@ -78,3 +79,29 @@ The realistic planning number is about 12 GB per stage per full day, with 20 GB 
 - session glossary for IT terminology
 - fully offline operation
 - predictable sustained performance on a fanless MacBook Air
+
+## Calm Public Captions
+
+Raw ASR partials are useful for the operator but should not drive the public output directly. Streaming ASR can revise words as more context arrives, which makes the audience output feel restless if every partial update redraws the sentence.
+
+The display architecture now includes a draft buffer, stability gate, and caption scheduler. The public HDMI output consumes scheduled stable caption cues, while the operator Live workspace still shows raw draft text for troubleshooting.
+
+Implemented display modes:
+
+- Calm Blocks: default conference mode, showing stable blocks after a short delay.
+- Live Roll-up: rolling stable text for faster speakers.
+- Fast Draft: immediate raw draft output for testing, not recommended for public screens.
+
+Implementation details for future refinements are kept in the local untracked calm-caption display spec.
+
+## Glossary Management
+
+The glossary remains stored as simple `input => output` text so session logs, import/export, and deterministic post-correction stay transparent. The operator UI now treats that text as structured rows:
+
+- Heard as: what WhisperKit or the operator expects to hear.
+- Show as: the spelling that should appear publicly.
+- Alias groups: multiple heard forms mapped to one preferred output.
+- Quality checks: duplicate pairs, empty sides, and conflicting mappings.
+- Session suggestions: frequent recent transcript terms that are not already in the glossary.
+
+Advanced bulk edit is still available for pasting prepared terminology before an event.

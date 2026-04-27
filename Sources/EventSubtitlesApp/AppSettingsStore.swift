@@ -26,6 +26,12 @@ struct AppSettings: Codable {
     var captionOffsetX: Double?
     var captionOffsetY: Double?
     var keepMacAwakeDuringSession: Bool?
+    var captionDisplayMode: CaptionDisplayMode?
+    var captionStabilityLevel: CaptionStabilityLevel?
+    var captionCommitDelay: Double?
+    var captionUnstableWordCount: Int?
+    var captionMinimumHold: Double?
+    var captionMaximumLatency: Double?
 }
 
 struct CodableColor: Codable {

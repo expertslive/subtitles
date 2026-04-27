@@ -8,7 +8,7 @@
 4. Set `Capture` to `Live subtitles` for a real event, or `Demo captions` for screen checks.
 5. Open the Models workspace, choose a WhisperKit model, and run `Prepare Offline Model` while online.
 6. Switch Wi-Fi off and run a short WhisperKit test to confirm the model is cached.
-7. Open the Glossary workspace and create or paste the session glossary.
+7. Open the Glossary workspace and add, import, or bulk-paste the session glossary.
 8. Open the Output workspace, show the output window, and move it to the HDMI display.
 9. Use `Fill Display` and confirm the downstream video switcher keys the chroma green correctly.
 10. Leave `Keep Mac awake` enabled unless another venue power plan is managing the machine.
@@ -23,6 +23,8 @@
   - lock to English or Dutch for scheduled talks
   - use Automatic only when the speaker language is unknown
 - Captions:
+  - Display Flow: `Calm Blocks` for normal conference screens
+  - Stability: `Calm` for public output, `Fast Draft` only for testing
   - 2 lines for lower-third broadcast use
   - 3 lines for accessibility screens
   - bottom position for general audience display
@@ -43,13 +45,14 @@
 ## Workspace Guide
 
 - Live: operate the event and watch the output preview.
-- Style: tune typography, colors, line count, safe margins, and preview.
-- Glossary: maintain terminology, search terms, and test corrections.
+- Style: tune typography, colors, line count, safe margins, display flow, and preview.
+- Glossary: maintain terminology with row editing, alias groups, quality checks, suggestions, search, and test corrections.
 - Glossary import/export:
   - Import supports JSON, CSV, and plain text glossary lines.
   - Export supports JSON and CSV.
   - JSON can be `{ "entries": [...] }`, an array of entries, or a string dictionary.
   - CSV uses `input,output` columns.
+  - Advanced bulk edit still accepts plain `heard as => show as` lines.
 - Logs: inspect session status, expected files, and captured captions.
 - Models: prepare WhisperKit models, verify offline readiness, and check app memory/resource guidance.
 - Translation: configure translation mode and local translation commands.

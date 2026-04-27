@@ -15,6 +15,11 @@
 - Font size needs to go below 34 for some output setups. The current range starts at 18.
 - About text should be short. Long About panels are not useful for operators.
 - Active subtitling should prevent idle sleep, but the app should not keep the Mac awake just because it is open.
+- Raw ASR partials are too restless for the public HDMI output. The audience should see stable scheduled caption cues; raw draft text belongs in the operator UI.
+- Calm display is more important than minimum possible latency. A small delay is acceptable if it prevents sentences from changing while visitors are reading.
+- For public output, prefer append-only or scheduled cue behavior: Calm Blocks for conference screens and Live Roll-up for fast speech.
+- In translation mode, translate only stable source phrases. Translating raw partials causes word-order and grammar churn on screen.
+- The first calm-display implementation uses repeated partial prefixes plus a hidden unstable suffix. Future refinement can use WhisperKit word timestamps or confidence if available.
 
 ## WhisperKit
 
@@ -44,18 +49,22 @@
 
 ## Glossary
 
-- A raw text glossary is fast to edit, but import/export is needed for real event prep.
+- A raw text glossary is fast to paste, but it should not be the primary operator interface.
+- Keep the simple `input => output` text format as the storage and log format, then layer row editing on top.
+- Operators need add/edit/delete rows, alias grouping, search, test phrases, and visible quality checks.
+- Session suggestions are useful as a lightweight way to mine terms from recent captions without building a full log-analysis system yet.
 - Import supports JSON, CSV, and plain text.
 - Export supports JSON and CSV.
 - JSON should support multiple shapes because different users/tools will produce different formats:
   - `{ "entries": [...] }`
   - `[ { "input": "...", "output": "..." } ]`
   - `{ "wrong": "Correct" }`
-- Future work should move from text-only storage to structured glossary entries with aliases, type, language, notes, and enabled state.
+- Future work can add structured metadata such as type, language, notes, and enabled state.
 
 ## Release And Distribution
 
 - GitHub releases are the easiest download path for non-developers.
+- Keep only the latest GitHub release online. Delete the previous release and tag after the new release and asset have been verified.
 - The app is currently ad-hoc signed for local testing, so first launch may require Control-click > Open.
 - Release assets should include a zipped `.app` bundle and SHA-256.
 - Keep release notes short and practical: download, highlights, validation commands, first-launch note.
@@ -67,4 +76,5 @@
 - Add SRT regeneration and cleanup tooling in Logs.
 - Add in-app audio input selection instead of relying only on macOS default input.
 - Add display selection and test cards in Output.
-- Add structured glossary storage and richer glossary editing.
+- Add richer glossary metadata and suggestions from previous session folders.
+- Refine calm caption heuristics after real event testing.

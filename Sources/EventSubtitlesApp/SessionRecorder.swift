@@ -25,6 +25,10 @@ final class SessionRecorder {
         var safeMargin: Double
         var lineSpacing: Double
         var captionPosition: String
+        var displayMode: String
+        var stability: String
+        var commitDelay: Double
+        var minimumHold: Double
     }
 
     private let fileManager = FileManager.default

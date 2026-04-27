@@ -9,6 +9,7 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 - [Architecture](docs/architecture.md)
 - [Event runbook](docs/event-runbook.md)
 - [Lessons learned](docs/lessons-learned.md)
+- [Release process](docs/release-process.md)
 - [Original project prompt](initial_prompt.txt)
 
 ## Features
@@ -18,11 +19,12 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 - second-window subtitle output with chroma green background
 - configurable font, size, colors, margins, and two/three-line layout
 - fine-position controls for nudging captions left/right/up/down
+- calm public-caption display modes with draft/stable separation
 - automatic sleep prevention while a subtitle session is running
 - local pipeline interfaces for ASR and translation engines
 - task-focused capture modes for demo captions, live WhisperKit subtitles, and audio-only recording
 - WhisperKit/Core ML live ASR engine path
-- glossary import/export for JSON and CSV
+- glossary term editor with add/edit/delete rows, alias groups, validation, suggestions, and JSON/CSV import/export
 - timestamped session logging with transcripts, SRTs, JSONL segments, and raw input audio
 - custom macOS app icon bundled into `build/EventSubtitles.app`
 
@@ -52,7 +54,7 @@ swift run PrepareWhisperModel large-v3-v20240930_626MB
 GitHub releases include a zipped macOS app bundle:
 
 ```text
-EventSubtitles-v0.2.1-macos-arm64.zip
+EventSubtitles-v0.2.2-macos-arm64.zip
 ```
 
 Unzip it and launch `EventSubtitles.app`. The app is ad-hoc signed for local testing, so macOS may require opening it from Finder with Control-click > Open the first time.
@@ -90,9 +92,10 @@ The intended production path is:
 ```text
 USB audio interface
   -> local ASR engine, initially WhisperKit/Core ML
+  -> draft buffer and stability gate
   -> glossary correction
   -> optional local EN/NL or NL/EN translation
-  -> subtitle composer
+  -> calm caption scheduler and subtitle composer
   -> full-screen HDMI/chroma-key output
 ```
 
