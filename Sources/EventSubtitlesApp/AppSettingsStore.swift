@@ -23,6 +23,9 @@ struct AppSettings: Codable {
     var shadowEnabled: Bool
     var shadowRadius: Double
     var captionPosition: String
+    var captionOffsetX: Double?
+    var captionOffsetY: Double?
+    var keepMacAwakeDuringSession: Bool?
 }
 
 struct CodableColor: Codable {

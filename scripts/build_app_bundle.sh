@@ -9,6 +9,7 @@ APP_DIR="$ROOT_DIR/build/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+APP_ICON_SOURCE="$ROOT_DIR/Assets/AppIconSource.jpg"
 
 cd "$ROOT_DIR"
 swift build --configuration "$CONFIGURATION" --product EventSubtitles
@@ -16,7 +17,11 @@ swift build --configuration "$CONFIGURATION" --product EventSubtitles
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BUILD_DIR/EventSubtitles" "$MACOS_DIR/EventSubtitles"
-swift -module-cache-path "$ROOT_DIR/build/ModuleCache" "$ROOT_DIR/scripts/generate_app_icon.swift" "$RESOURCES_DIR/AppIcon.icns"
+if [[ -f "$APP_ICON_SOURCE" ]]; then
+    swift -module-cache-path "$ROOT_DIR/build/ModuleCache" "$ROOT_DIR/scripts/generate_app_icon.swift" "$RESOURCES_DIR/AppIcon.icns" "$APP_ICON_SOURCE"
+else
+    swift -module-cache-path "$ROOT_DIR/build/ModuleCache" "$ROOT_DIR/scripts/generate_app_icon.swift" "$RESOURCES_DIR/AppIcon.icns"
+fi
 
 cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -25,6 +30,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Subtitles</string>
     <key>CFBundleExecutable</key>
     <string>EventSubtitles</string>
     <key>CFBundleIdentifier</key>
@@ -34,13 +41,13 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>EventSubtitles</string>
+    <string>Subtitles</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2.0</string>
+    <string>0.2.1</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

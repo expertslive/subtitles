@@ -82,7 +82,7 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     }
 
     func stop() async {
-        await stop(unloadModel: true)
+        await stop(unloadModel: false)
     }
 
     private func stop(unloadModel: Bool) async {

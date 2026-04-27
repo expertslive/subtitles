@@ -20,25 +20,28 @@ The first layout pass is implemented in `OperatorView`.
 Implemented:
 
 - Persistent left operator strip.
-- Right-side workspace selector.
-- Live workspace with output preview, current caption, and history.
-- Style workspace with grouped typography, layout, color, shadow, presets, and preview.
-- Glossary workspace with editor, search, term table, and test phrase.
+- Right-side workspace selector with subtle button surfaces and borders.
+- Live workspace with output preview, current caption, and a full-height history column.
+- Style workspace with grouped typography, layout, color, shadow, presets, fine X/Y positioning, and preview.
+- Glossary workspace with editor, search, term table, test phrase, JSON import/export, and CSV import/export.
 - Logs workspace with current session status, expected files, and captured captions.
-- Models workspace with model preparation and offline readiness.
+- Models workspace with model preparation, offline readiness, prepare guidance, and resource checks.
 - Translation workspace with translation settings and test source/display preview.
 - Audio workspace with input, level, clipping, and recording status.
 - Output workspace with output-window actions, background presets, signal status, and preview.
 - Responsive workspace layout for narrower windows.
+- Custom app icon generated from `Assets/AppIconSource.jpg`.
+- Short app-specific About panel.
+- Automatic sleep prevention while a session is running, controlled from the operator strip.
 
 Still future work:
 
 - Structured glossary storage.
-- Import/export for glossary data.
 - Browsing previous session folders.
 - Regenerating SRT files from the Logs workspace.
 - Audio input selection from inside the app.
 - Display selection and output test cards.
+- Audio storage estimator in Audio or Logs.
 
 ## Always-Visible Operator Strip
 
@@ -50,6 +53,7 @@ The left strip should stay available across tabs and contain only the controls t
 - Compact audio level meter.
 - Engine status.
 - Recording/logging status.
+- Keep Mac awake toggle and status.
 - Manual caption input.
 - Critical output window controls.
 
@@ -208,6 +212,8 @@ Useful areas:
 - Prepare/download status.
 - Disk usage.
 - Offline readiness check.
+- Prepare guidance explaining offline caching, first-start warmup, and retained model memory after Stop.
+- Resource checks for Mac memory, app memory, and CPU/GPU inspection through Activity Monitor.
 - Model health check.
 - Test transcription with sample audio.
 - Benchmark results.

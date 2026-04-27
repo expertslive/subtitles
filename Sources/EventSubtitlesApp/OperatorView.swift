@@ -71,9 +71,16 @@ struct OperatorView: View {
                             .lineLimit(1)
                             .padding(.horizontal, 11)
                             .padding(.vertical, 7)
-                            .background(selectedWorkspace == workspace ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor))
+                            .background(selectedWorkspace == workspace ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor).opacity(0.72))
                             .foregroundStyle(selectedWorkspace == workspace ? Color.accentColor : Color.primary)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(
+                                        selectedWorkspace == workspace ? Color.accentColor.opacity(0.28) : Color.secondary.opacity(0.16),
+                                        lineWidth: 1
+                                    )
+                            }
                     }
                     .buttonStyle(.plain)
                     .help(workspace.title)
@@ -138,6 +145,7 @@ struct OperatorView: View {
             }
 
             audioInputRow
+            sleepPreventionRow
 
             HStack {
                 Button {
@@ -230,6 +238,30 @@ struct OperatorView: View {
         .foregroundStyle(.secondary)
     }
 
+    private var sleepPreventionRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Toggle(
+                "Keep Mac awake",
+                isOn: Binding(
+                    get: { state.keepMacAwakeDuringSession },
+                    set: { state.setKeepMacAwakeDuringSession($0) }
+                )
+            )
+
+            Spacer(minLength: 8)
+
+            Label(
+                state.sleepPreventionStatus,
+                systemImage: state.keepMacAwakeDuringSession ? "moon.zzz.slash" : "moon.zzz"
+            )
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+            .foregroundStyle(state.sleepPreventionStatus == "Awake failed" ? .orange : .secondary)
+        }
+        .font(.caption)
+        .help("Keeps the Mac and connected output display awake while a session is running.")
+    }
+
     private var sessionStatusRow: some View {
         HStack(spacing: 7) {
             Text(state.engineStatus)
@@ -255,9 +287,36 @@ struct OperatorView: View {
     }
 
     private var liveWorkspace: some View {
+        GeometryReader { proxy in
+            let useColumns = proxy.size.width >= 980
+            let historyWidth = min(390, max(320, proxy.size.width * 0.28))
+
+            if useColumns {
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        previewPanel(maxHeight: 430)
+                        currentTranscript
+                            .frame(minHeight: 150)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+                    historyPanel
+                        .frame(width: historyWidth)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 18) {
+                    previewPanel(maxHeight: 430)
+                    currentTranscript
+                        .frame(minHeight: 150)
+                    historyPanel
+                }
+            }
+        }
+    }
+
+    private var compactLiveWorkspace: some View {
         VStack(alignment: .leading, spacing: 18) {
             previewPanel(maxHeight: 430)
-
             HStack(alignment: .top, spacing: 18) {
                 currentTranscript
                 historyPanel
@@ -308,11 +367,11 @@ struct OperatorView: View {
                 .labelsHidden()
             }
 
-            SliderRow(title: "Font size", value: $state.fontSize, range: 34...120, step: 1)
+            SliderRow(title: "Font size", value: $state.fontSize, range: 18...120, step: 1)
             SliderRow(title: "Line width", value: Binding(
                 get: { Double(state.targetCharactersPerLine) },
                 set: { state.targetCharactersPerLine = Int($0) }
-            ), range: 28...60, step: 1)
+            ), range: 12...60, step: 1)
 
             Button {
                 state.saveSettings()
@@ -347,7 +406,69 @@ struct OperatorView: View {
                 }
             }
             .pickerStyle(.segmented)
+
+            captionFinePositionControls
         }
+    }
+
+    private var captionFinePositionControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Fine position")
+                Spacer()
+                Text("X \(Int(state.captionOffsetX)) / Y \(Int(state.captionOffsetY))")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            HStack(spacing: 10) {
+                VStack(spacing: 6) {
+                    positionNudgeButton(systemImage: "arrow.up", help: "Move captions up") {
+                        state.captionOffsetY -= 8
+                    }
+
+                    HStack(spacing: 6) {
+                        positionNudgeButton(systemImage: "arrow.left", help: "Move captions left") {
+                            state.captionOffsetX -= 8
+                        }
+
+                        Button {
+                            state.captionOffsetX = 0
+                            state.captionOffsetY = 0
+                        } label: {
+                            Image(systemName: "scope")
+                                .frame(width: 28, height: 28)
+                        }
+                        .help("Reset caption offset")
+
+                        positionNudgeButton(systemImage: "arrow.right", help: "Move captions right") {
+                            state.captionOffsetX += 8
+                        }
+                    }
+
+                    positionNudgeButton(systemImage: "arrow.down", help: "Move captions down") {
+                        state.captionOffsetY += 8
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Stepper("Horizontal", value: $state.captionOffsetX, in: -400...400, step: 1)
+                    Stepper("Vertical", value: $state.captionOffsetY, in: -300...300, step: 1)
+                }
+            }
+        }
+    }
+
+    private func positionNudgeButton(
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 28, height: 28)
+        }
+        .help(help)
     }
 
     private var colorControls: some View {
@@ -431,22 +552,46 @@ struct OperatorView: View {
 
                 Spacer()
 
-                Button {
-                    state.saveSettings()
-                } label: {
-                    Label("Save Glossary", systemImage: "square.and.arrow.down")
-                }
+                glossaryFileActions
             }
 
             VStack(alignment: .leading, spacing: 10) {
                 TextField("Search glossary", text: $glossarySearch)
                     .textFieldStyle(.roundedBorder)
 
+                glossaryFileActions
+            }
+        }
+    }
+
+    private var glossaryFileActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                state.importGlossary()
+            } label: {
+                Label("Import", systemImage: "square.and.arrow.down.on.square")
+            }
+
+            Menu {
                 Button {
-                    state.saveSettings()
+                    state.exportGlossaryJSON()
                 } label: {
-                    Label("Save Glossary", systemImage: "square.and.arrow.down")
+                    Label("JSON", systemImage: "curlybraces")
                 }
+
+                Button {
+                    state.exportGlossaryCSV()
+                } label: {
+                    Label("CSV", systemImage: "tablecells")
+                }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+
+            Button {
+                state.saveSettings()
+            } label: {
+                Label("Save", systemImage: "square.and.arrow.down")
             }
         }
     }
@@ -602,18 +747,26 @@ struct OperatorView: View {
                             modelSetupPanel
                                 .frame(maxWidth: .infinity)
 
-                            offlineReadinessPanel
+                            modelSideColumn
                                 .frame(width: readinessWidth)
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 16) {
                             modelSetupPanel
-                            offlineReadinessPanel
+                            modelSideColumn
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+        }
+    }
+
+    private var modelSideColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            offlineReadinessPanel
+            modelPreparationPanel
+            modelResourcesPanel
         }
     }
 
@@ -629,6 +782,52 @@ struct OperatorView: View {
             LabeledContent("Model", value: state.whisperModelName)
             LabeledContent("Status", value: state.modelStatus)
             LabeledContent("Running", value: state.isRunning ? "Yes" : "No")
+        }
+    }
+
+    private var modelPreparationPanel: some View {
+        ControlPanel(title: "Prepare Model") {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Caches the selected WhisperKit model for offline use.", systemImage: "externaldrive")
+                Label("Run this before the event while you still have network.", systemImage: "wifi")
+                Label("The first Start can take a few seconds while the model warms up.", systemImage: "timer")
+                Label("After Stop, the model stays loaded so restart is faster.", systemImage: "bolt")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var modelResourcesPanel: some View {
+        ControlPanel(title: "Resources") {
+            LabeledContent("Mac memory", value: state.systemMemoryText)
+            LabeledContent("App memory", value: state.appMemoryUsageText)
+            LabeledContent("CPU/GPU", value: "Activity Monitor")
+
+            Text("Large models can use several GB while loaded. If memory pressure turns yellow or red, switch to a smaller model or close other apps.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button {
+                    state.refreshResourceUsage()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+
+                Button {
+                    state.openActivityMonitor()
+                } label: {
+                    Label("Activity Monitor", systemImage: "gauge")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .onAppear {
+            state.refreshResourceUsage()
         }
     }
 
@@ -913,7 +1112,7 @@ struct OperatorView: View {
             captionHistoryList
         }
         .padding(16)
-        .frame(width: 320)
+        .frame(maxWidth: .infinity)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))

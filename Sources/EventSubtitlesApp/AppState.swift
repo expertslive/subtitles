@@ -1,6 +1,8 @@
 import AppKit
+import Darwin
 import EventSubtitlesCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppState: ObservableObject {
@@ -48,6 +50,8 @@ final class AppState: ObservableObject {
     @Published var shadowEnabled = true
     @Published var shadowRadius = 7.0
     @Published var captionPosition: CaptionVerticalPosition = .bottom
+    @Published var captionOffsetX = 0.0
+    @Published var captionOffsetY = 0.0
 
     @Published var glossaryText = """
     kubernetes => Kubernetes
@@ -64,6 +68,9 @@ final class AppState: ObservableObject {
     @Published var sessionDirectoryPath: String?
     @Published var sessionSegmentCount = 0
     @Published var sessionElapsedText = "00:00:00"
+    @Published var keepMacAwakeDuringSession = true
+    @Published var sleepPreventionStatus = "Awake ready"
+    @Published var appMemoryUsageText = "Unknown"
 
     private let simulatorTranscriber = MockLocalTranscriber()
     private let whisperKitTranscriber = WhisperKitTranscriber()
@@ -72,6 +79,7 @@ final class AppState: ObservableObject {
     private let commandLineTranslator = CommandLineTranslator()
     private let sessionRecorder = SessionRecorder()
     private let settingsStore = AppSettingsStore()
+    private let sleepPreventer = SleepPreventer()
     private var outputController: OutputWindowController?
     private var sessionStartedAt: Date?
     private var sessionTimer: Timer?
@@ -79,6 +87,8 @@ final class AppState: ObservableObject {
     init() {
         loadSettings()
         refreshAudioInputDevice()
+        refreshResourceUsage()
+        updateSleepPreventionStatusForIdle()
     }
 
     func start() {
@@ -90,8 +100,10 @@ final class AppState: ObservableObject {
         errorMessage = nil
         saveSettings()
         engineStatus = transcriptionEngine.statusLabel
+        startSleepPreventionIfNeeded()
         startSessionLog()
         startSessionTimer()
+        refreshResourceUsage()
 
         Task { @MainActor [weak self] in
             guard let self else {
@@ -124,9 +136,11 @@ final class AppState: ObservableObject {
         audioMonitor.stop()
         audioLevel = 0
         isRunning = false
-        engineStatus = "Simulator idle"
+        engineStatus = transcriptionEngine.idleStatusLabel
+        stopSleepPrevention()
         stopSessionTimer()
         stopSessionLog()
+        refreshResourceUsage()
     }
 
     func pushManualCaption() {
@@ -187,6 +201,34 @@ final class AppState: ObservableObject {
         }
     }
 
+    var systemMemoryText: String {
+        byteCountString(ProcessInfo.processInfo.physicalMemory)
+    }
+
+    func refreshResourceUsage() {
+        appMemoryUsageText = currentResidentMemoryText()
+    }
+
+    func openActivityMonitor() {
+        let url = URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app")
+        NSWorkspace.shared.open(url)
+    }
+
+    func setKeepMacAwakeDuringSession(_ enabled: Bool) {
+        keepMacAwakeDuringSession = enabled
+        saveSettings()
+
+        if isRunning {
+            if enabled {
+                startSleepPreventionIfNeeded()
+            } else {
+                stopSleepPrevention()
+            }
+        } else {
+            updateSleepPreventionStatusForIdle()
+        }
+    }
+
     func saveSettings() {
         settingsStore.save(
             AppSettings(
@@ -209,9 +251,46 @@ final class AppState: ObservableObject {
                 backgroundColor: CodableColor(color: backgroundColor),
                 shadowEnabled: shadowEnabled,
                 shadowRadius: shadowRadius,
-                captionPosition: captionPosition.rawValue
+                captionPosition: captionPosition.rawValue,
+                captionOffsetX: captionOffsetX,
+                captionOffsetY: captionOffsetY,
+                keepMacAwakeDuringSession: keepMacAwakeDuringSession
             )
         )
+    }
+
+    func importGlossary() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Glossary"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [
+            .json,
+            .commaSeparatedText,
+            .plainText
+        ]
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            let importedText = try glossaryText(from: data, fileExtension: url.pathExtension.lowercased())
+            glossaryText = importedText
+            saveSettings()
+        } catch {
+            errorMessage = "Glossary import failed: \(error.localizedDescription)"
+        }
+    }
+
+    func exportGlossaryJSON() {
+        exportGlossary(format: .json)
+    }
+
+    func exportGlossaryCSV() {
+        exportGlossary(format: .csv)
     }
 
     private func loadSettings() {
@@ -239,6 +318,195 @@ final class AppState: ObservableObject {
         shadowEnabled = settings.shadowEnabled
         shadowRadius = settings.shadowRadius
         captionPosition = CaptionVerticalPosition(rawValue: settings.captionPosition) ?? .bottom
+        captionOffsetX = settings.captionOffsetX ?? 0
+        captionOffsetY = settings.captionOffsetY ?? 0
+        keepMacAwakeDuringSession = settings.keepMacAwakeDuringSession ?? true
+    }
+
+    private func exportGlossary(format: GlossaryExportFormat) {
+        let panel = NSSavePanel()
+        panel.title = "Export Glossary"
+        panel.nameFieldStringValue = "\(sessionName.slugified)-glossary.\(format.fileExtension)"
+        panel.allowedContentTypes = [format.contentType]
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let data: Data
+            switch format {
+            case .json:
+                data = try exportGlossaryJSONData()
+            case .csv:
+                data = exportGlossaryCSVData()
+            }
+            try data.write(to: url, options: .atomic)
+        } catch {
+            errorMessage = "Glossary export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func glossaryText(from data: Data, fileExtension: String) throws -> String {
+        switch fileExtension {
+        case "json":
+            return try importGlossaryJSON(data)
+        case "csv":
+            return try importGlossaryCSV(data)
+        default:
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw GlossaryIOError.invalidTextEncoding
+            }
+            return text
+        }
+    }
+
+    private func importGlossaryJSON(_ data: Data) throws -> String {
+        let decoder = JSONDecoder()
+
+        if let file = try? decoder.decode(GlossaryJSONFile.self, from: data) {
+            return glossaryText(from: file.entries)
+        }
+
+        if let entries = try? decoder.decode([GlossaryJSONEntry].self, from: data) {
+            return glossaryText(from: entries)
+        }
+
+        if let dictionary = try? decoder.decode([String: String].self, from: data) {
+            return dictionary
+                .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+                .map { "\($0.key) => \($0.value)" }
+                .joined(separator: "\n")
+        }
+
+        throw GlossaryIOError.invalidJSON
+    }
+
+    private func importGlossaryCSV(_ data: Data) throws -> String {
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw GlossaryIOError.invalidTextEncoding
+        }
+
+        let lines = text
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        return lines.enumerated().compactMap { index, line in
+            let columns = parseCSVLine(line)
+            guard columns.count >= 2 else {
+                return nil
+            }
+
+            if index == 0,
+               columns[0].localizedCaseInsensitiveContains("input") ||
+                columns[0].localizedCaseInsensitiveContains("term") {
+                return nil
+            }
+
+            let input = columns[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let output = columns[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !input.isEmpty, !output.isEmpty else {
+                return nil
+            }
+            return "\(input) => \(output)"
+        }
+        .joined(separator: "\n")
+    }
+
+    private func exportGlossaryJSONData() throws -> Data {
+        let file = GlossaryJSONFile(entries: glossaryEntriesForExport().map {
+            GlossaryJSONEntry(input: $0.input, output: $0.output)
+        })
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(file)
+    }
+
+    private func exportGlossaryCSVData() -> Data {
+        var lines = ["input,output"]
+        lines.append(contentsOf: glossaryEntriesForExport().map {
+            "\(csvEscape($0.input)),\(csvEscape($0.output))"
+        })
+        return Data(lines.joined(separator: "\n").utf8)
+    }
+
+    private func glossaryEntriesForExport() -> [(input: String, output: String)] {
+        glossaryText
+            .split(whereSeparator: \.isNewline)
+            .compactMap { rawLine in
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty, !line.hasPrefix("#") else {
+                    return nil
+                }
+
+                if let separator = line.range(of: "=>") {
+                    let input = line[..<separator.lowerBound]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let output = line[separator.upperBound...]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !input.isEmpty, !output.isEmpty else {
+                        return nil
+                    }
+                    return (String(input), String(output))
+                }
+
+                return (line, line)
+            }
+    }
+
+    private func glossaryText(from entries: [GlossaryJSONEntry]) -> String {
+        entries.compactMap { entry in
+            let input = entry.input.trimmingCharacters(in: .whitespacesAndNewlines)
+            let output = entry.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !input.isEmpty, !output.isEmpty, entry.enabled ?? true else {
+                return nil
+            }
+            return "\(input) => \(output)"
+        }
+        .joined(separator: "\n")
+    }
+
+    private func parseCSVLine(_ line: String) -> [String] {
+        var columns: [String] = []
+        var current = ""
+        var isQuoted = false
+        var iterator = line.makeIterator()
+
+        while let character = iterator.next() {
+            if character == "\"" {
+                if isQuoted, let next = iterator.next() {
+                    if next == "\"" {
+                        current.append("\"")
+                    } else {
+                        isQuoted = false
+                        if next != "," {
+                            current.append(next)
+                        } else {
+                            columns.append(current)
+                            current = ""
+                        }
+                    }
+                } else {
+                    isQuoted.toggle()
+                }
+            } else if character == ",", !isQuoted {
+                columns.append(current)
+                current = ""
+            } else {
+                current.append(character)
+            }
+        }
+
+        columns.append(current)
+        return columns
+    }
+
+    private func csvEscape(_ value: String) -> String {
+        if value.contains(",") || value.contains("\"") || value.contains("\n") {
+            return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+        }
+        return value
     }
 
     func prepareWhisperKitModel() {
@@ -259,6 +527,7 @@ final class AppState: ObservableObject {
                 self.whisperKitTranscriber.setModelName(self.whisperModelName)
                 try await self.whisperKitTranscriber.prepareModel()
                 self.modelStatus = "Prepared \(self.whisperModelName)"
+                self.refreshResourceUsage()
             } catch {
                 self.modelStatus = "Prepare failed"
                 self.errorMessage = "WhisperKit model prepare failed: \(error.localizedDescription)"
@@ -266,6 +535,61 @@ final class AppState: ObservableObject {
 
             self.isPreparingModel = false
         }
+    }
+
+    private func startSleepPreventionIfNeeded() {
+        guard keepMacAwakeDuringSession else {
+            sleepPreventionStatus = "Sleep allowed"
+            return
+        }
+
+        do {
+            try sleepPreventer.enable(reason: "Subtitles is running an event subtitle session.")
+            sleepPreventionStatus = "Awake on"
+        } catch {
+            sleepPreventionStatus = "Awake failed"
+            errorMessage = "Sleep prevention unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    private func stopSleepPrevention() {
+        sleepPreventer.disable()
+        updateSleepPreventionStatusForIdle()
+    }
+
+    private func updateSleepPreventionStatusForIdle() {
+        sleepPreventionStatus = keepMacAwakeDuringSession ? "Awake ready" : "Sleep allowed"
+    }
+
+    private func currentResidentMemoryText() -> String {
+        var info = mach_task_basic_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<integer_t>.size
+        )
+
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPointer in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    reboundPointer,
+                    &count
+                )
+            }
+        }
+
+        guard result == KERN_SUCCESS else {
+            return "Unknown"
+        }
+
+        return byteCountString(UInt64(info.resident_size))
+    }
+
+    private func byteCountString(_ bytes: UInt64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
     }
 
     private func startSessionLog() {
@@ -499,5 +823,64 @@ final class AppState: ObservableObject {
             targetCharactersPerLine: targetCharactersPerLine
         )
         captionLayout = composer.compose(currentEvent?.displayText ?? "")
+    }
+}
+
+private enum GlossaryExportFormat {
+    case json
+    case csv
+
+    var fileExtension: String {
+        switch self {
+        case .json: "json"
+        case .csv: "csv"
+        }
+    }
+
+    var contentType: UTType {
+        switch self {
+        case .json: .json
+        case .csv: .commaSeparatedText
+        }
+    }
+}
+
+private struct GlossaryJSONFile: Codable {
+    var entries: [GlossaryJSONEntry]
+}
+
+private struct GlossaryJSONEntry: Codable {
+    var input: String
+    var output: String
+    var language: String?
+    var type: String?
+    var notes: String?
+    var enabled: Bool?
+}
+
+private enum GlossaryIOError: LocalizedError {
+    case invalidJSON
+    case invalidTextEncoding
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidJSON:
+            "JSON must be an object with an entries array, an array of entries, or a string dictionary."
+        case .invalidTextEncoding:
+            "The file must be UTF-8 text."
+        }
+    }
+}
+
+private extension String {
+    var slugified: String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : "-"
+        }
+        let collapsed = String(scalars)
+            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return collapsed.isEmpty ? "session" : collapsed
     }
 }

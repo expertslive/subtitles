@@ -6,3 +6,5 @@ DerivedData/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcresult
+codex.txt
+initial_prompt.txt

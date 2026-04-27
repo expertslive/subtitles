@@ -3,6 +3,7 @@ import Foundation
 
 enum IconError: Error {
     case missingOutputPath
+    case missingSourceImage(String)
     case drawingFailed
     case invalidFourCC(String)
 }
@@ -12,6 +13,7 @@ guard CommandLine.arguments.count >= 2 else {
 }
 
 let outputURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let sourceImageURL = CommandLine.arguments.count >= 3 ? URL(fileURLWithPath: CommandLine.arguments[2]) : nil
 let fileManager = FileManager.default
 try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
@@ -25,8 +27,18 @@ let representations: [(type: String, pixels: Int)] = [
     ("ic10", 1024)
 ]
 
+let sourceImage = try sourceImageURL.map { url in
+    guard let image = NSImage(contentsOf: url) else {
+        throw IconError.missingSourceImage(url.path)
+    }
+    return image
+}
+
 let iconEntries = try representations.map { representation in
-    (type: representation.type, data: try renderIconPNG(pixels: representation.pixels))
+    (
+        type: representation.type,
+        data: try renderIconPNG(pixels: representation.pixels, sourceImage: sourceImage)
+    )
 }
 
 let totalLength = 8 + iconEntries.reduce(0) { total, entry in
@@ -59,7 +71,7 @@ private func appendUInt32BE(_ value: UInt32, to data: inout Data) {
     }
 }
 
-private func renderIconPNG(pixels: Int) throws -> Data {
+private func renderIconPNG(pixels: Int, sourceImage: NSImage?) throws -> Data {
     guard let representation = NSBitmapImageRep(
         bitmapDataPlanes: nil,
         pixelsWide: pixels,
@@ -80,13 +92,53 @@ private func renderIconPNG(pixels: Int) throws -> Data {
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = graphicsContext
 
-    let scale = CGFloat(pixels) / 1024
     let canvas = CGRect(x: 0, y: 0, width: pixels, height: pixels)
-    let outer = canvas.insetBy(dx: 54 * scale, dy: 54 * scale)
-    let screen = CGRect(x: 166 * scale, y: 218 * scale, width: 692 * scale, height: 554 * scale)
 
     NSColor.clear.setFill()
     canvas.fill()
+
+    if let sourceImage {
+        drawSourceIcon(sourceImage, in: canvas)
+    } else {
+        drawGeneratedIcon(in: canvas, pixels: pixels)
+    }
+
+    NSGraphicsContext.restoreGraphicsState()
+
+    guard let data = representation.representation(using: .png, properties: [:]) else {
+        throw IconError.drawingFailed
+    }
+    return data
+}
+
+private func drawSourceIcon(_ sourceImage: NSImage, in canvas: CGRect) {
+    guard sourceImage.size.width > 0, sourceImage.size.height > 0 else {
+        return
+    }
+
+    let sourceSize = sourceImage.size
+    let cropSide = min(sourceSize.width, sourceSize.height)
+    let sourceRect = CGRect(
+        x: (sourceSize.width - cropSide) / 2,
+        y: (sourceSize.height - cropSide) / 2,
+        width: cropSide,
+        height: cropSide
+    )
+
+    sourceImage.draw(
+        in: canvas,
+        from: sourceRect,
+        operation: .copy,
+        fraction: 1,
+        respectFlipped: false,
+        hints: [.interpolation: NSImageInterpolation.high]
+    )
+}
+
+private func drawGeneratedIcon(in canvas: CGRect, pixels: Int) {
+    let scale = CGFloat(pixels) / 1024
+    let outer = canvas.insetBy(dx: 54 * scale, dy: 54 * scale)
+    let screen = CGRect(x: 166 * scale, y: 218 * scale, width: 692 * scale, height: 554 * scale)
 
     NSColor(calibratedRed: 0.05, green: 0.06, blue: 0.075, alpha: 1).setFill()
     NSBezierPath(roundedRect: outer, xRadius: 208 * scale, yRadius: 208 * scale).fill()
@@ -108,13 +160,6 @@ private func renderIconPNG(pixels: Int) throws -> Data {
 
     drawWaveform(in: screen, scale: scale)
     drawSubtitleBars(in: screen, scale: scale)
-
-    NSGraphicsContext.restoreGraphicsState()
-
-    guard let data = representation.representation(using: .png, properties: [:]) else {
-        throw IconError.drawingFailed
-    }
-    return data
 }
 
 private func drawWaveform(in rect: CGRect, scale: CGFloat) {
