@@ -2,6 +2,8 @@
 
 A native macOS app, displayed as `Subtitles`, for offline live subtitles and Dutch/English translation at events.
 
+![Subtitles operator interface](docs/subtitles.png)
+
 ## Documentation
 
 Start with the documentation index in [docs/README.md](docs/README.md).
