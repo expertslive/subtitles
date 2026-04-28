@@ -9,7 +9,8 @@ struct EventSubtitlesApp: App {
         WindowGroup("Subtitles") {
             OperatorView()
                 .environmentObject(appState)
-                .frame(minWidth: 1120, minHeight: 760)
+                .preferredColorScheme(.dark)
+                .frame(minWidth: 1180, minHeight: 760)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
@@ -18,18 +19,41 @@ struct EventSubtitlesApp: App {
                 }
             }
 
+            CommandMenu("Session") {
+                Button("Start") {
+                    appState.start()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(appState.isRunning)
+
+                Button("Stop") {
+                    appState.stop()
+                }
+                .keyboardShortcut(".", modifiers: .command)
+                .disabled(!appState.isRunning)
+            }
+
+            CommandMenu("Workspace") {
+                ForEach(OperatorWorkspace.allCases) { workspace in
+                    Button(workspace.title) {
+                        appState.selectedWorkspace = workspace
+                    }
+                    .keyboardShortcut(workspace.keyboardShortcut, modifiers: .command)
+                }
+            }
+
             CommandMenu("Output") {
-                Button("Show Output Window") {
+                Button("Show output window") {
                     appState.showOutputWindow()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
 
-                Button("Fill External Display") {
+                Button("Fill external display") {
                     appState.fillExternalDisplay()
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
 
-                Button("Restore Output Window") {
+                Button("Restore output window") {
                     appState.restoreOutputWindow()
                 }
             }

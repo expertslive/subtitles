@@ -346,3 +346,5 @@ Possible SwiftUI direction:
   - `OutputWorkspaceView`.
 
 The first implementation can be layout-only, moving the existing controls into the new workspaces before adding richer functionality.
+
+Implemented v0.3 redesign: NavigationSplitView sidebar, toolbar with global controls, Now panel, preview-first Style workspace.

@@ -21,6 +21,7 @@ final class AppState: ObservableObject {
     @Published var engineStatus = "Simulator idle"
     @Published var errorMessage: String?
     @Published var sessionName = "Main stage"
+    @Published var selectedWorkspace: OperatorWorkspace = .live
     @Published var transcriptionEngine: TranscriptionEngineChoice = .simulator
     @Published var whisperModelName = "large-v3-v20240930_626MB"
     @Published var modelStatus = "Not prepared"
