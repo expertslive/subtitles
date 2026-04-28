@@ -5,23 +5,24 @@ struct StyleWorkspace: View {
     @EnvironmentObject private var state: AppState
     @State private var showSafeArea = true
 
-    private let gridColumns = [
-        GridItem(.flexible(), spacing: 16),
-        GridItem(.flexible(), spacing: 16)
-    ]
-
     var body: some View {
         VStack(spacing: 0) {
             previewBand
             Divider()
             ScrollView {
-                LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 16) {
-                    typographySection
-                    layoutSection
-                    colorSection
-                    displayFlowSection
-                    presetsSection
-                        .gridCellColumns(2)
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        typographySection
+                        layoutSection
+                        displayFlowSection
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        colorSection
+                        presetsSection
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .padding(18)
             }
@@ -291,7 +292,7 @@ struct StyleWorkspace: View {
 
     private var presetsSection: some View {
         WorkspaceSection(title: "Presets") {
-            HStack {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 presetButton("Chroma green", systemImage: "wand.and.stars", selected: isChromaPreset) {
                     state.useChromaGreen()
                     state.foregroundColor = .white

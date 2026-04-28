@@ -5,7 +5,7 @@ extension OperatorView {
     @ToolbarContentBuilder
     var operatorToolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            HStack(spacing: 12) {
+            HStack(spacing: 9) {
                 ToolbarSessionField(text: Binding(
                     get: { state.sessionName },
                     set: {
@@ -23,7 +23,7 @@ extension OperatorView {
                             state.saveSettings()
                         }
                     ),
-                    width: 150,
+                    width: 128,
                     isDisabled: state.isRunning
                 ) {
                     ForEach(TranscriptionEngineChoice.allCases) { engine in
@@ -40,7 +40,7 @@ extension OperatorView {
                             state.saveSettings()
                         }
                     ),
-                    width: 110
+                    width: 92
                 ) {
                     ForEach(SourceLanguage.allCases) { language in
                         Text(language.label).tag(language)
@@ -56,7 +56,7 @@ extension OperatorView {
                             state.saveSettings()
                         }
                     ),
-                    width: 145
+                    width: 126
                 ) {
                     ForEach(ProcessingMode.allCases) { mode in
                         Text(mode.label).tag(mode)
@@ -66,7 +66,7 @@ extension OperatorView {
                 ToolbarAudioMeter(level: state.audioLevel) {
                     state.selectedWorkspace = .audio
                 }
-                .frame(width: 210, height: 28)
+                .frame(width: 170, height: 28)
             }
             .fixedSize(horizontal: true, vertical: false)
         }
@@ -130,7 +130,7 @@ private struct ToolbarSessionField: View {
             .font(.system(.body, design: .default).weight(.semibold))
             .lineLimit(1)
             .padding(.horizontal, 9)
-            .frame(width: 120, height: 28)
+            .frame(width: 92, height: 28)
             .background(toolbarControlBackground)
             .overlay(toolbarControlBorder)
             .clipShape(RoundedRectangle(cornerRadius: 7))

@@ -190,6 +190,9 @@ public struct CaptionStabilityEngine: Sendable {
         }
 
         let commonPrefix = commonPrefixCount(previousTokens, tokens)
+        if commonPrefix < committedTokenCount {
+            committedTokenCount = 0
+        }
         let publishableCount = min(
             commonPrefix,
             max(0, tokens.count - configuration.unstableWordCount)
@@ -211,6 +214,35 @@ public struct CaptionStabilityEngine: Sendable {
                 text: phrase,
                 committedAt: snapshot.createdAt,
                 isFinal: false
+            )
+        ]
+    }
+
+    public mutating func flushPending(
+        committedAt: Date = Date(),
+        isFinal: Bool = false
+    ) -> [StableCaptionPhrase] {
+        guard committedTokenCount < previousTokens.count else {
+            if isFinal {
+                reset()
+            }
+            return []
+        }
+
+        let phrase = previousTokens[committedTokenCount...]
+            .map(\.text)
+            .joined(separator: " ")
+        committedTokenCount = previousTokens.count
+
+        if isFinal {
+            reset()
+        }
+
+        return [
+            StableCaptionPhrase(
+                text: phrase,
+                committedAt: committedAt,
+                isFinal: isFinal
             )
         ]
     }

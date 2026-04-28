@@ -198,9 +198,12 @@ struct ToolbarAudioMeter: View {
             HStack(spacing: 8) {
                 Image(systemName: "waveform")
                     .foregroundStyle(.secondary)
+                    .frame(width: 14)
                 AudioLevelMeter(level: level, showsDB: true, showsTicks: true, peakHold: false)
-                    .frame(width: 190, height: 22)
+                    .frame(width: 140, height: 22)
             }
+            .frame(width: 170, height: 28)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("Open Audio workspace")
