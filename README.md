@@ -56,7 +56,7 @@ swift run PrepareWhisperModel large-v3-v20240930_626MB
 GitHub releases include a zipped macOS app bundle:
 
 ```text
-EventSubtitles-v0.2.2-macos-arm64.zip
+EventSubtitles-v3.0.0-macos-arm64.zip
 ```
 
 Unzip it and launch `EventSubtitles.app`. The app is ad-hoc signed for local testing, so macOS may require opening it from Finder with Control-click > Open the first time.

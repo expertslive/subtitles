@@ -347,4 +347,4 @@ Possible SwiftUI direction:
 
 The first implementation can be layout-only, moving the existing controls into the new workspaces before adding richer functionality.
 
-Implemented v0.3 redesign: NavigationSplitView sidebar, toolbar with global controls, Now panel, preview-first Style workspace.
+Implemented v3.0.0 redesign: NavigationSplitView sidebar, toolbar with global controls, Now panel, preview-first Style workspace, row-based Glossary workspace, and stable Calm Blocks public output with idle-tail flush.

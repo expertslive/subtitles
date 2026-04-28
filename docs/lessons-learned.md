@@ -20,6 +20,9 @@
 - For public output, prefer append-only or scheduled cue behavior: Calm Blocks for conference screens and Live Roll-up for fast speech.
 - In translation mode, translate only stable source phrases. Translating raw partials causes word-order and grammar churn on screen.
 - The first calm-display implementation uses repeated partial prefixes plus a hidden unstable suffix. Future refinement can use WhisperKit word timestamps or confidence if available.
+- Calm Blocks needs an idle-tail flush. If ASR does not send a final segment, publish the remaining held words after the maximum latency so the last spoken sentence does not wait for the next sentence.
+- Standard macOS toolbar controls can change intrinsic size on hover/focus. Keep operator toolbar controls in fixed frames so live controls do not shift across split-view dividers.
+- Avoid `LazyVGrid` for uneven settings sections when each column should flow independently. Separate vertical columns prevent short cards from inheriting blank space from tall neighbor cells.
 
 ## WhisperKit
 
