@@ -86,6 +86,8 @@ Raw ASR partials are useful for the operator but should not drive the public out
 
 The display architecture now includes a draft buffer, stability gate, and caption scheduler. The public HDMI output consumes scheduled stable caption cues, while the operator Live workspace still shows raw draft text for troubleshooting.
 
+Calm Blocks also has an idle-tail flush. If WhisperKit keeps the last words as an unstable partial and does not emit a final segment quickly, the app publishes the remaining tail after the configured maximum latency. This prevents the last spoken sentence from waiting until the speaker starts a new sentence.
+
 Implemented display modes:
 
 - Calm Blocks: default conference mode, showing stable blocks after a short delay.

@@ -21,6 +21,7 @@ final class AppState: ObservableObject {
     @Published var engineStatus = "Simulator idle"
     @Published var errorMessage: String?
     @Published var sessionName = "Main stage"
+    @Published var selectedWorkspace: OperatorWorkspace = .live
     @Published var transcriptionEngine: TranscriptionEngineChoice = .simulator
     @Published var whisperModelName = "large-v3-v20240930_626MB"
     @Published var modelStatus = "Not prepared"
@@ -94,6 +95,7 @@ final class AppState: ObservableObject {
     private var captionDisplayScheduler = CaptionDisplayScheduler()
     private var outputController: OutputWindowController?
     private var sessionStartedAt: Date?
+    private var lastCaptionSnapshotAt: Date?
     private var sessionTimer: Timer?
     private var captionDisplayTimer: Timer?
     private var lastDetectedLanguageForDisplay: SourceLanguage?
@@ -720,7 +722,7 @@ final class AppState: ObservableObject {
         captionDisplayTimer?.invalidate()
         captionDisplayTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.publishNextCaptionCue()
+                await self?.tickCaptionDisplayPipeline()
             }
         }
     }
@@ -863,8 +865,11 @@ final class AppState: ObservableObject {
             return
         }
 
+        let snapshot = TranscriptSnapshot(text: text, createdAt: now, isFinal: isFinal)
+        lastCaptionSnapshotAt = isFinal ? nil : snapshot.createdAt
+
         let phrases = captionStabilityEngine.ingest(
-            TranscriptSnapshot(text: text, createdAt: now, isFinal: isFinal),
+            snapshot,
             configuration: captionDisplayConfiguration
         )
 
@@ -880,6 +885,9 @@ final class AppState: ObservableObject {
         }
 
         publishNextCaptionCue(force: isFinal)
+        if isFinal {
+            lastCaptionSnapshotAt = nil
+        }
     }
 
     private func publishFastDraft(
@@ -948,6 +956,42 @@ final class AppState: ObservableObject {
         updateCaptionSchedulerStatus()
     }
 
+    private func tickCaptionDisplayPipeline() async {
+        await flushIdleCaptionTailIfNeeded()
+        publishNextCaptionCue()
+    }
+
+    private func flushIdleCaptionTailIfNeeded() async {
+        guard captionDisplayMode != .fastDraft, mode == .subtitlesOnly, let lastCaptionSnapshotAt else {
+            return
+        }
+
+        let configuration = captionDisplayConfiguration
+        let now = Date()
+        guard now.timeIntervalSince(lastCaptionSnapshotAt) >= configuration.maximumLatency else {
+            return
+        }
+
+        let phrases = captionStabilityEngine.flushPending(committedAt: now, isFinal: false)
+        guard !phrases.isEmpty else {
+            self.lastCaptionSnapshotAt = nil
+            return
+        }
+
+        self.lastCaptionSnapshotAt = nil
+        let corrector = GlossaryCorrector(rawGlossary: glossaryText)
+        for phrase in phrases {
+            let stableSource = corrector.apply(to: phrase.text)
+            let translated = await translate(stableSource, isFinal: true)
+            let display = corrector.apply(to: translated)
+            captionDisplayScheduler.enqueue(
+                sourceText: stableSource,
+                displayText: display,
+                now: phrase.committedAt
+            )
+        }
+    }
+
     private func recordDisplayedEvent(
         _ event: TranscriptEvent,
         detectedLanguage: SourceLanguage? = nil
@@ -976,6 +1020,7 @@ final class AppState: ObservableObject {
         stableCaptionQueueText = ""
         captionDisplayLatencyText = "0.0s"
         lastDetectedLanguageForDisplay = nil
+        lastCaptionSnapshotAt = nil
 
         if clearOutput {
             currentEvent = nil

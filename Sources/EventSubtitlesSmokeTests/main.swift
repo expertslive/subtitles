@@ -84,6 +84,63 @@ private func testCaptionStabilityHidesUnstableSuffix() {
     expect(stable.map(\.text) == ["Hoe snel komt dit op het"], "stability should hide the unstable suffix")
 }
 
+private func testCaptionStabilityFlushesIdleTail() {
+    var engine = CaptionStabilityEngine()
+    let configuration = CaptionDisplayConfiguration(
+        mode: .calmBlocks,
+        stability: .calm,
+        commitDelay: 1.0,
+        unstableWordCount: 2,
+        minimumHold: 1.2,
+        maximumLatency: 3.0
+    )
+    let snapshot = TranscriptSnapshot(
+        text: "Dit moet na stilte alsnog verschijnen",
+        createdAt: Date(timeIntervalSince1970: 1),
+        isFinal: false
+    )
+
+    expect(engine.ingest(snapshot, configuration: configuration).isEmpty, "first partial should wait")
+    let flushed = engine.flushPending(committedAt: Date(timeIntervalSince1970: 4))
+    expect(
+        flushed.map(\.text) == ["Dit moet na stilte alsnog verschijnen"],
+        "idle flush should publish the last spoken sentence"
+    )
+}
+
+private func testCaptionStabilityContinuesAfterIdleFlush() {
+    var engine = CaptionStabilityEngine()
+    let configuration = CaptionDisplayConfiguration(
+        mode: .calmBlocks,
+        stability: .balanced,
+        commitDelay: 0.8,
+        unstableWordCount: 1,
+        minimumHold: 1.0,
+        maximumLatency: 2.5
+    )
+
+    _ = engine.ingest(
+        TranscriptSnapshot(text: "Eerste zin blijft niet hangen", createdAt: Date(timeIntervalSince1970: 1), isFinal: false),
+        configuration: configuration
+    )
+    _ = engine.flushPending(committedAt: Date(timeIntervalSince1970: 4))
+    expect(
+        engine.ingest(
+            TranscriptSnapshot(text: "Nieuwe zin begint rustig", createdAt: Date(timeIntervalSince1970: 5), isFinal: false),
+            configuration: configuration
+        ).isEmpty,
+        "new partial after idle flush should start a fresh stability window"
+    )
+    let stable = engine.ingest(
+        TranscriptSnapshot(text: "Nieuwe zin begint rustig verder", createdAt: Date(timeIntervalSince1970: 6), isFinal: false),
+        configuration: configuration
+    )
+    expect(
+        stable.map(\.text) == ["Nieuwe zin begint rustig"],
+        "stability should continue publishing after an idle flush"
+    )
+}
+
 private func testCaptionSchedulerRespectsMinimumHold() {
     var scheduler = CaptionDisplayScheduler()
     let configuration = CaptionDisplayConfiguration(
@@ -119,6 +176,8 @@ testGlossaryCorrectorAppliesCaseInsensitiveCorrections()
 testSRTFormatterProducesExpectedTimestamp()
 testSRTFormatterCanExportSourceAndDisplayTracks()
 testCaptionStabilityHidesUnstableSuffix()
+testCaptionStabilityFlushesIdleTail()
+testCaptionStabilityContinuesAfterIdleFlush()
 testCaptionSchedulerRespectsMinimumHold()
 
 print("Smoke tests passed")
