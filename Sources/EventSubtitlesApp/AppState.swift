@@ -101,7 +101,7 @@ final class AppState: ObservableObject {
 
     private let simulatorTranscriber = MockLocalTranscriber()
     private let whisperKitTranscriber = WhisperKitTranscriber()
-    private let audioMonitor = AudioLevelMonitor()
+    private let capturePipeline = AudioCapturePipeline()
     private let translator = RuleBasedTranslator()
     private let commandLineTranslator = CommandLineTranslator()
     private let sessionRecorder = SessionRecorder()
@@ -141,21 +141,24 @@ final class AppState: ObservableObject {
         refreshResourceUsage()
 
         Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
+            guard let self else { return }
             do {
-                try await self.audioMonitor.start(
+                try await self.capturePipeline.start(
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
-                    recordingURL: self.sessionRecorder.audioRecordingURL
-                ) { [weak self] level in
-                    Task { @MainActor [weak self] in
-                        self?.publishAudioLevel(Double(level))
+                    recordingURL: self.sessionRecorder.audioRecordingURL,
+                    onLevel: { [weak self] sample in
+                        Task { @MainActor [weak self] in
+                            self?.publishAudioLevel(Double(max(sample.rms, sample.peak)))
+                        }
+                    },
+                    onConfigurationChange: { [weak self] in
+                        Task { @MainActor [weak self] in
+                            self?.handleAudioConfigurationChange()
+                        }
                     }
-                }
+                )
             } catch {
-                self.errorMessage = "Audio level unavailable: \(error.localizedDescription)"
+                self.errorMessage = "Audio capture unavailable: \(error.localizedDescription)"
             }
         }
 
@@ -171,7 +174,7 @@ final class AppState: ObservableObject {
         Task {
             await whisperKitTranscriber.stop()
         }
-        audioMonitor.stop()
+        capturePipeline.stop()
         audioLevel = 0
         isRunning = false
         engineStatus = transcriptionEngine.idleStatusLabel
@@ -273,6 +276,12 @@ final class AppState: ObservableObject {
 
     func useSystemDefaultAudioInput() {
         setSelectedAudioInputDeviceID(nil)
+    }
+
+    @MainActor
+    private func handleAudioConfigurationChange() {
+        // Implemented in Task 11.
+        refreshAudioInputDevice()
     }
 
     private func selectedAudioInputDeviceForCapture() -> AudioDeviceID? {
@@ -857,14 +866,11 @@ final class AppState: ObservableObject {
             }
         case .whisperKit:
             Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-
+                guard let self else { return }
                 do {
                     self.whisperKitTranscriber.setModelName(self.whisperModelName)
                     try await self.whisperKitTranscriber.start(
-                        inputDeviceID: self.selectedAudioInputDeviceForCapture(),
+                        sampleStream: self.capturePipeline.sampleStream,
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
                             glossary: self.glossaryText,

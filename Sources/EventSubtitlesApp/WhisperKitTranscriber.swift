@@ -1,5 +1,4 @@
 @preconcurrency import AVFoundation
-import CoreML
 import EventSubtitlesCore
 import Foundation
 @preconcurrency import WhisperKit
@@ -7,6 +6,8 @@ import Foundation
 final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     private var whisperKit: WhisperKit?
     private var streamTranscriber: AudioStreamTranscriber?
+    private var streamProcessor: StreamFedAudioProcessor?
+    private var sampleFeederTask: Task<Void, Never>?
     private var lastConfirmedSegmentCount = 0
     private var lastPartialText = ""
     private var modelName: String
@@ -33,11 +34,13 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         configuration: SpeechEngineConfiguration,
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) async throws {
-        try await start(inputDeviceID: nil, configuration: configuration, onResult: onResult)
+        // Protocol conformance fallback — should not be called in the unified pipeline path.
+        // Throws to make a misuse loud rather than silently launching with no audio.
+        throw WhisperKitTranscriberError.streamNotProvided
     }
 
     func start(
-        inputDeviceID: DeviceID?,
+        sampleStream: AsyncStream<[Float]>,
         configuration: SpeechEngineConfiguration,
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) async throws {
@@ -80,16 +83,16 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             chunkingStrategy: .vad
         )
 
+        let processor = StreamFedAudioProcessor()
+        self.streamProcessor = processor
+
         let transcriber = AudioStreamTranscriber(
             audioEncoder: kit.audioEncoder,
             featureExtractor: kit.featureExtractor,
             segmentSeeker: kit.segmentSeeker,
             textDecoder: kit.textDecoder,
             tokenizer: tokenizer,
-            audioProcessor: SelectedInputAudioProcessor(
-                base: kit.audioProcessor,
-                inputDeviceID: inputDeviceID
-            ),
+            audioProcessor: processor,
             decodingOptions: decodeOptions,
             requiredSegmentsForConfirmation: 1,
             silenceThreshold: 0.25,
@@ -101,6 +104,14 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
         streamTranscriber = transcriber
         try await transcriber.startStreamTranscription()
+
+        // Pump samples from AudioCapturePipeline into the processor, on a background task.
+        sampleFeederTask = Task.detached(priority: .userInitiated) { [weak processor] in
+            for await chunk in sampleStream {
+                guard !Task.isCancelled else { break }
+                processor?.ingest(chunk)
+            }
+        }
     }
 
     func stop() async {
@@ -108,6 +119,10 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     }
 
     private func stop(unloadModel: Bool) async {
+        sampleFeederTask?.cancel()
+        sampleFeederTask = nil
+        streamProcessor = nil
+
         await streamTranscriber?.stopStreamTranscription()
         streamTranscriber = nil
         if unloadModel {
@@ -229,115 +244,15 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
 enum WhisperKitTranscriberError: LocalizedError {
     case tokenizerUnavailable
+    case streamNotProvided
 
     var errorDescription: String? {
         switch self {
         case .tokenizerUnavailable:
             "WhisperKit tokenizer was not loaded."
+        case .streamNotProvided:
+            "WhisperKit transcriber requires an audio sample stream."
         }
     }
 }
 
-private final class SelectedInputAudioProcessor: AudioProcessing {
-    private var base: any AudioProcessing
-    private let inputDeviceID: DeviceID?
-
-    init(base: any AudioProcessing, inputDeviceID: DeviceID?) {
-        self.base = base
-        self.inputDeviceID = inputDeviceID
-    }
-
-    static func loadAudio(
-        fromPath audioFilePath: String,
-        channelMode: ChannelMode,
-        startTime: Double?,
-        endTime: Double?,
-        maxReadFrameSize: AVAudioFrameCount?
-    ) throws -> AVAudioPCMBuffer {
-        try AudioProcessor.loadAudio(
-            fromPath: audioFilePath,
-            channelMode: channelMode,
-            startTime: startTime,
-            endTime: endTime,
-            maxReadFrameSize: maxReadFrameSize
-        )
-    }
-
-    static func loadAudio(
-        at audioPaths: [String],
-        channelMode: ChannelMode
-    ) async -> [Result<[Float], Error>] {
-        await AudioProcessor.loadAudio(at: audioPaths, channelMode: channelMode)
-    }
-
-    static func padOrTrimAudio(
-        fromArray audioArray: [Float],
-        startAt startIndex: Int,
-        toLength frameLength: Int,
-        saveSegment: Bool
-    ) -> MLMultiArray? {
-        AudioProcessor.padOrTrimAudio(
-            fromArray: audioArray,
-            startAt: startIndex,
-            toLength: frameLength,
-            saveSegment: saveSegment
-        )
-    }
-
-    var audioSamples: ContiguousArray<Float> {
-        base.audioSamples
-    }
-
-    var relativeEnergy: [Float] {
-        base.relativeEnergy
-    }
-
-    var relativeEnergyWindow: Int {
-        get { base.relativeEnergyWindow }
-        set { base.relativeEnergyWindow = newValue }
-    }
-
-    func purgeAudioSamples(keepingLast keep: Int) {
-        base.purgeAudioSamples(keepingLast: keep)
-    }
-
-    func startRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
-        try base.startRecordingLive(
-            inputDeviceID: inputDeviceID ?? self.inputDeviceID,
-            callback: callback
-        )
-    }
-
-    func startStreamingRecordingLive(
-        inputDeviceID: DeviceID?
-    ) -> (AsyncThrowingStream<[Float], Error>, AsyncThrowingStream<[Float], Error>.Continuation) {
-        base.startStreamingRecordingLive(inputDeviceID: inputDeviceID ?? self.inputDeviceID)
-    }
-
-    func pauseRecording() {
-        base.pauseRecording()
-    }
-
-    func stopRecording() {
-        base.stopRecording()
-    }
-
-    func resumeRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
-        try base.resumeRecordingLive(
-            inputDeviceID: inputDeviceID ?? self.inputDeviceID,
-            callback: callback
-        )
-    }
-
-    func padOrTrim(
-        fromArray audioArray: [Float],
-        startAt startIndex: Int,
-        toLength frameLength: Int
-    ) -> (any AudioProcessorOutputType)? {
-        base.padOrTrim(
-            fromArray: audioArray,
-            startAt: startIndex,
-            toLength: frameLength
-        )
-    }
-}
