@@ -105,6 +105,7 @@ final class AppState: ObservableObject {
     private let translator = RuleBasedTranslator()
     private let commandLineTranslator = CommandLineTranslator()
     private let sessionRecorder = SessionRecorder()
+    private let sessionLogger = SessionLogger()
     private let settingsStore = AppSettingsStore()
     private let sleepPreventer = SleepPreventer()
     private var captionStabilityEngine = CaptionStabilityEngine()
@@ -158,6 +159,7 @@ final class AppState: ObservableObject {
                     }
                 )
             } catch {
+                self.sessionLogger.error("Audio capture start failed: \(error.localizedDescription)")
                 self.errorMessage = "Audio capture unavailable: \(error.localizedDescription)"
             }
         }
@@ -277,6 +279,7 @@ final class AppState: ObservableObject {
     @MainActor
     private func handleAudioConfigurationChange() {
         refreshAudioInputDevice()
+        sessionLogger.warn("Audio configuration change; restarting capture")
         guard isRunning else { return }
 
         let priorDescription = audioInputDescription
@@ -294,6 +297,7 @@ final class AppState: ObservableObject {
                     self.errorMessage = "Audio device changed: \(self.audioInputDescription)"
                 }
             } catch {
+                self.sessionLogger.error("Capture restart failed: \(error.localizedDescription)")
                 self.engineStatus = "Capture restart failed"
                 self.errorMessage = "Audio capture restart failed: \(error.localizedDescription)"
             }
@@ -719,6 +723,7 @@ final class AppState: ObservableObject {
             try sleepPreventer.enable(reason: "Subtitles is running an event subtitle session.")
             sleepPreventionStatus = "Awake on"
         } catch {
+            sessionLogger.warn("Sleep prevention failed: \(error.localizedDescription)")
             sleepPreventionStatus = "Awake failed"
             errorMessage = "Sleep prevention unavailable: \(error.localizedDescription)"
         }
@@ -789,6 +794,8 @@ final class AppState: ObservableObject {
                 glossary: glossaryText
             )
             sessionDirectoryPath = url.path
+            sessionLogger.open(at: url)
+            sessionLogger.info("Session started: name=\(sessionName) engine=\(transcriptionEngine.label) model=\(whisperModelName) device=\(audioInputDescription)")
             sessionSegmentCount = 0
             sessionLogStatus = "Recording"
         } catch {
@@ -799,6 +806,7 @@ final class AppState: ObservableObject {
     }
 
     private func stopSessionLog() {
+        sessionLogger.info("Session stopping")
         do {
             try sessionRecorder.stop()
             if sessionDirectoryPath != nil {
@@ -810,6 +818,7 @@ final class AppState: ObservableObject {
             sessionLogStatus = "Save failed"
             errorMessage = "Session log save failed: \(error.localizedDescription)"
         }
+        sessionLogger.close()
     }
 
     private func startSessionTimer() {
@@ -899,6 +908,7 @@ final class AppState: ObservableObject {
                         }
                     }
                 } catch {
+                    self.sessionLogger.error("WhisperKit start failed: \(error.localizedDescription)")
                     self.engineStatus = "WhisperKit failed"
                     self.errorMessage = "WhisperKit unavailable: \(error.localizedDescription)"
                 }
@@ -1172,6 +1182,7 @@ final class AppState: ObservableObject {
                     argumentTemplate: translationCommandArguments
                 )
             } catch {
+                sessionLogger.error("Translation failed: \(error.localizedDescription)")
                 errorMessage = "Translation failed: \(error.localizedDescription)"
                 return translator.translate(source, mode: mode)
             }
