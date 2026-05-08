@@ -48,17 +48,16 @@ struct SubtitleOutputView: View {
 
     private var captionLines: some View {
         // Always render at the operator's selected fontSize. No auto-scaling.
-        // Lines are pre-wrapped to fit `targetCharactersPerLine`; if the operator
-        // selects a font size whose pixel width overflows the screen, that's their
-        // tuning to do. Truncation (tail) handles any residual overflow gracefully
-        // without changing the perceived font size.
+        // No truncation either — every committed word must reach the audience.
+        // Lines are pre-wrapped to `targetCharactersPerLine`; if the operator
+        // selects a font size whose pixel width forces individual lines to
+        // re-wrap, the block grows taller rather than dropping words.
         Text(state.captionLayout.text)
             .font(.custom(state.fontName, size: state.fontSize).weight(.bold))
             .foregroundStyle(state.foregroundColor)
             .multilineTextAlignment(.center)
             .lineSpacing(state.lineSpacing)
-            .lineLimit(state.maxLines)
-            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
             .allowsTightening(false)
             .shadow(
                 color: state.shadowEnabled ? .black.opacity(0.82) : .clear,
