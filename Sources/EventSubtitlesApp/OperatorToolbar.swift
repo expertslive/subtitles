@@ -78,7 +78,7 @@ extension OperatorView {
                         title: "Stop",
                         systemImage: "stop.fill",
                         tint: .red,
-                        action: state.stop
+                        action: { Task { await state.stop() } }
                     )
                     .keyboardShortcut(".", modifiers: .command)
 

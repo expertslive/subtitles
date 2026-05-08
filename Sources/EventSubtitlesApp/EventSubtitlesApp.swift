@@ -27,7 +27,7 @@ struct EventSubtitlesApp: App {
                 .disabled(appState.isRunning)
 
                 Button("Stop") {
-                    appState.stop()
+                    Task { await appState.stop() }
                 }
                 .keyboardShortcut(".", modifiers: .command)
                 .disabled(!appState.isRunning)

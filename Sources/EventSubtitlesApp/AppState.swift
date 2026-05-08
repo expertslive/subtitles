@@ -165,15 +165,11 @@ final class AppState: ObservableObject {
         startTranscriptionEngine()
     }
 
-    func stop() {
-        guard isRunning else {
-            return
-        }
+    func stop() async {
+        guard isRunning else { return }
 
         simulatorTranscriber.stopNow()
-        Task {
-            await whisperKitTranscriber.stop()
-        }
+        await whisperKitTranscriber.stop()
         capturePipeline.stop()
         audioLevel = 0
         isRunning = false
