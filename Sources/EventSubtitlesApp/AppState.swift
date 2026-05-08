@@ -183,11 +183,7 @@ final class AppState: ObservableObject {
     }
 
     func clearCaptions() {
-        currentEvent = nil
-        draftEvent = nil
-        publicCaptionText = ""
-        captionLayout = CaptionLayout(lines: [])
-        resetCaptionDisplayPipeline(clearOutput: false)
+        resetCaptionDisplayPipeline(clearOutput: true)
     }
 
     func showOutputWindow() {

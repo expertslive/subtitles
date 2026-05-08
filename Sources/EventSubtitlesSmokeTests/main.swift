@@ -170,6 +170,35 @@ private func testCaptionSchedulerRespectsMinimumHold() {
     )
 }
 
+private func testStabilityEngineResetClearsCommittedPrefix() {
+    var engine = CaptionStabilityEngine()
+    let configuration = CaptionDisplayConfiguration(
+        mode: .calmBlocks,
+        stability: .balanced,
+        commitDelay: 0.5,
+        unstableWordCount: 2,
+        minimumHold: 1.0,
+        maximumLatency: 3.0
+    )
+
+    _ = engine.ingest(
+        TranscriptSnapshot(text: "embarrassing first half", createdAt: Date(timeIntervalSince1970: 1), isFinal: false),
+        configuration: configuration
+    )
+    _ = engine.ingest(
+        TranscriptSnapshot(text: "embarrassing first half follow up", createdAt: Date(timeIntervalSince1970: 2), isFinal: false),
+        configuration: configuration
+    )
+
+    engine.reset()
+
+    let next = engine.ingest(
+        TranscriptSnapshot(text: "embarrassing first half follow up", createdAt: Date(timeIntervalSince1970: 3), isFinal: false),
+        configuration: configuration
+    )
+    expect(next.isEmpty, "after reset, the previously committed prefix must not re-publish on the next partial")
+}
+
 testComposerKeepsOnlyConfiguredNumberOfLines()
 testComposerNormalizesWhitespace()
 testGlossaryCorrectorAppliesCaseInsensitiveCorrections()
@@ -179,5 +208,6 @@ testCaptionStabilityHidesUnstableSuffix()
 testCaptionStabilityFlushesIdleTail()
 testCaptionStabilityContinuesAfterIdleFlush()
 testCaptionSchedulerRespectsMinimumHold()
+testStabilityEngineResetClearsCommittedPrefix()
 
 print("Smoke tests passed")
