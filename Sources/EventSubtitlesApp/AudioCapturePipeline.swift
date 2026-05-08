@@ -50,25 +50,15 @@ final class AudioCapturePipeline: @unchecked Sendable {
     }()
 
     private var levelHandler: (@Sendable (AudioLevelSample) -> Void)?
-    private var sampleContinuation: AsyncStream<[Float]>.Continuation?
+    private var samplesHandler: (@Sendable ([Float]) -> Void)?
     private var configChangeObserver: NSObjectProtocol?
     private var defaultDeviceListenerInstalled = false
     private var defaultInputListenerBlock: AudioObjectPropertyListenerBlock?
     private var onConfigurationDidChange: (@Sendable () -> Void)?
 
-    /// Async stream of mono 16 kHz Float samples. Tap callbacks `yield` into here.
-    /// The Whisper adapter reads this stream.
-    private(set) var sampleStream: AsyncStream<[Float]>!
-
-    init() {
-        let stream = AsyncStream<[Float]> { continuation in
-            self.sampleContinuation = continuation
-        }
-        self.sampleStream = stream
-    }
+    init() {}
 
     deinit {
-        sampleContinuation?.finish()
         if let configChangeObserver {
             NotificationCenter.default.removeObserver(configChangeObserver)
         }
@@ -81,19 +71,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         inputDeviceID: AudioDeviceID?,
         recordingURL: URL?,
         onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
+        onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
     ) async throws {
-        // Recreate the sample stream synchronously, BEFORE any await, so consumers
-        // that read `sampleStream` after this method is dispatched (e.g. the Whisper
-        // feeder task) but before its first suspension point see a fresh stream.
-        // AsyncStream supports only one consumer iterator over its lifetime; without
-        // this, a Stop → Start cycle leaves the new feeder iterating a finished stream
-        // that produces no values.
-        sampleContinuation?.finish()
-        sampleStream = AsyncStream<[Float]> { continuation in
-            self.sampleContinuation = continuation
-        }
-
         guard await requestAudioAccess() else {
             throw AudioCapturePipelineError.microphoneDenied
         }
@@ -104,6 +84,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
 
         levelHandler = onLevel
+        samplesHandler = onSamples
         onConfigurationDidChange = onConfigurationChange
 
         if let inputDeviceID {
@@ -181,11 +162,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
             removeDefaultInputDeviceListener()
         }
 
-        // Close the per-session sample stream cleanly. The feeder task's `for await`
-        // loop will terminate naturally on end-of-stream, even before Whisper's stop
-        // explicitly cancels it. The next `start()` recreates a fresh stream.
-        sampleContinuation?.finish()
-        sampleContinuation = nil
+        samplesHandler = nil
     }
 
     func restart(
@@ -193,15 +170,17 @@ final class AudioCapturePipeline: @unchecked Sendable {
         recordingURL: URL?
     ) async throws {
         let level = self.levelHandler
+        let samples = self.samplesHandler
         let onChange = self.onConfigurationDidChange
         stop()
-        guard let level, let onChange else {
+        guard let level, let samples, let onChange else {
             throw AudioCapturePipelineError.inputUnavailable
         }
         try await start(
             inputDeviceID: inputDeviceID,
             recordingURL: recordingURL,
             onLevel: level,
+            onSamples: samples,
             onConfigurationChange: onChange
         )
     }
@@ -259,9 +238,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         let normalizedPeak = min(1, max(0, (dbPeak + 60) / 60))
         levelHandler?(AudioLevelSample(rms: normalizedRMS, peak: normalizedPeak))
 
-        // Yield a Float copy to the Whisper consumer.
+        // Hand a Float copy to the Whisper consumer via direct callback.
         let samples = Array(UnsafeBufferPointer(start: channel, count: frameCount))
-        sampleContinuation?.yield(samples)
+        samplesHandler?(samples)
 
         // Hand the converted PCM buffer to the write queue (off the audio thread).
         let bufferCopy = outBuffer

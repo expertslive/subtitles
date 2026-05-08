@@ -155,6 +155,11 @@ final class AppState: ObservableObject {
                             self?.publishAudioLevel(Double(max(sample.rms, sample.peak)))
                         }
                     },
+                    onSamples: { [weak self] samples in
+                        // Audio thread → Whisper. ingest is non-blocking and thread-safe
+                        // (StreamFedAudioProcessor uses an NSLock on its sample buffer).
+                        self?.whisperKitTranscriber.ingest(samples)
+                    },
                     onConfigurationChange: { [weak self] in
                         Task { @MainActor [weak self] in
                             self?.handleAudioConfigurationChange()
@@ -904,7 +909,6 @@ final class AppState: ObservableObject {
                 do {
                     self.whisperKitTranscriber.setModelName(self.whisperModelName)
                     try await self.whisperKitTranscriber.start(
-                        sampleStream: self.capturePipeline.sampleStream,
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
                             glossary: self.glossaryText,

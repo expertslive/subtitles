@@ -7,7 +7,6 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     private var whisperKit: WhisperKit?
     private var streamTranscriber: AudioStreamTranscriber?
     private var streamProcessor: StreamFedAudioProcessor?
-    private var sampleFeederTask: Task<Void, Never>?
     private var streamRunnerTask: Task<Void, Never>?
     private var lastConfirmedSegmentCount = 0
     private var lastPartialText = ""
@@ -31,17 +30,15 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         }
     }
 
-    func start(
-        configuration: SpeechEngineConfiguration,
-        onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
-    ) async throws {
-        // Protocol conformance fallback — should not be called in the unified pipeline path.
-        // Throws to make a misuse loud rather than silently launching with no audio.
-        throw WhisperKitTranscriberError.streamNotProvided
+    /// Push a chunk of 16 kHz mono Float samples directly into Whisper's audio buffer.
+    /// Called from the AudioCapturePipeline's tap callback (audio thread). Cheap, no
+    /// async hop, no stream allocation. Returns immediately if the transcriber is not
+    /// running yet (samples before start are dropped).
+    func ingest(_ samples: [Float]) {
+        streamProcessor?.ingest(samples)
     }
 
     func start(
-        sampleStream: AsyncStream<[Float]>,
         configuration: SpeechEngineConfiguration,
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) async throws {
@@ -108,19 +105,11 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
         streamTranscriber = transcriber
 
-        // Start the sample feeder FIRST so the processor's audioSamples grows the moment
-        // the realtime loop starts polling.
-        sampleFeederTask = Task.detached(priority: .userInitiated) { [weak processor] in
-            for await chunk in sampleStream {
-                guard !Task.isCancelled else { break }
-                processor?.ingest(chunk)
-            }
-        }
-
         // `startStreamTranscription()` enters a realtime loop that does not return until
         // `stopStreamTranscription()` flips `state.isRecording = false`. Run it as a
         // detached background task instead of awaiting it here, otherwise this method
         // (and every caller) would hang forever and `stop` would never run.
+        // Audio samples are pushed in via `ingest(_:)` from the capture pipeline's tap.
         streamRunnerTask = Task.detached(priority: .userInitiated) { [weak transcriber] in
             guard let transcriber else { return }
             do {
@@ -137,8 +126,6 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     }
 
     private func stop(unloadModel: Bool) async {
-        sampleFeederTask?.cancel()
-        sampleFeederTask = nil
         streamProcessor = nil
 
         await streamTranscriber?.stopStreamTranscription()
@@ -271,14 +258,11 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
 enum WhisperKitTranscriberError: LocalizedError {
     case tokenizerUnavailable
-    case streamNotProvided
 
     var errorDescription: String? {
         switch self {
         case .tokenizerUnavailable:
             "WhisperKit tokenizer was not loaded."
-        case .streamNotProvided:
-            "WhisperKit transcriber requires an audio sample stream."
         }
     }
 }
