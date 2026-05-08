@@ -280,8 +280,28 @@ final class AppState: ObservableObject {
 
     @MainActor
     private func handleAudioConfigurationChange() {
-        // Implemented in Task 11.
         refreshAudioInputDevice()
+        guard isRunning else { return }
+
+        let priorDescription = audioInputDescription
+        engineStatus = "Capture restarting"
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.capturePipeline.restart(
+                    inputDeviceID: self.selectedAudioInputDeviceForCapture(),
+                    recordingURL: nil // do NOT rotate the CAF mid-session; keep recording disabled on restart
+                )
+                self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
+                if priorDescription != self.audioInputDescription {
+                    self.errorMessage = "Audio device changed: \(self.audioInputDescription)"
+                }
+            } catch {
+                self.engineStatus = "Capture restart failed"
+                self.errorMessage = "Audio capture restart failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func selectedAudioInputDeviceForCapture() -> AudioDeviceID? {

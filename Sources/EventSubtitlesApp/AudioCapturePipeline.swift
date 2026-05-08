@@ -168,6 +168,24 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
     }
 
+    func restart(
+        inputDeviceID: AudioDeviceID?,
+        recordingURL: URL?
+    ) async throws {
+        let level = self.levelHandler
+        let onChange = self.onConfigurationDidChange
+        stop()
+        guard let level, let onChange else {
+            throw AudioCapturePipelineError.inputUnavailable
+        }
+        try await start(
+            inputDeviceID: inputDeviceID,
+            recordingURL: recordingURL,
+            onLevel: level,
+            onConfigurationChange: onChange
+        )
+    }
+
     // MARK: - Private
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
