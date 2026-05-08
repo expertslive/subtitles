@@ -75,6 +75,8 @@ final class AppState: ObservableObject {
     @Published var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
     @Published var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
     @Published var captionMaximumLatency = 3.0
+    @Published var captionLineMinHold = 2.0
+    @Published var captionIdleFlushAfter = 1.5
     @Published var draftEvent: TranscriptEvent?
     @Published var stableCaptionQueueText = ""
     @Published var captionDisplayLatencyText = "0.0s"
@@ -110,6 +112,7 @@ final class AppState: ObservableObject {
     private let sleepPreventer = SleepPreventer()
     private var captionStabilityEngine = CaptionStabilityEngine()
     private var captionDisplayScheduler = CaptionDisplayScheduler()
+    private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     private var outputController: OutputWindowController?
     private var sessionStartedAt: Date?
     private var lastCaptionSnapshotAt: Date?
@@ -335,7 +338,9 @@ final class AppState: ObservableObject {
             commitDelay: captionCommitDelay,
             unstableWordCount: captionUnstableWordCount,
             minimumHold: captionMinimumHold,
-            maximumLatency: captionMaximumLatency
+            maximumLatency: captionMaximumLatency,
+            lineMinHold: captionLineMinHold,
+            idleFlushAfter: captionIdleFlushAfter
         )
     }
 
@@ -410,6 +415,8 @@ final class AppState: ObservableObject {
                 captionUnstableWordCount: captionUnstableWordCount,
                 captionMinimumHold: captionMinimumHold,
                 captionMaximumLatency: captionMaximumLatency,
+                captionLineMinHold: captionLineMinHold,
+                captionIdleFlushAfter: captionIdleFlushAfter,
                 selectedAudioInputDeviceID: selectedAudioInputDeviceID
             )
         )
@@ -483,6 +490,8 @@ final class AppState: ObservableObject {
         captionUnstableWordCount = settings.captionUnstableWordCount ?? captionStabilityLevel.defaultUnstableWordCount
         captionMinimumHold = settings.captionMinimumHold ?? captionStabilityLevel.defaultMinimumHold
         captionMaximumLatency = settings.captionMaximumLatency ?? 3.0
+        captionLineMinHold = settings.captionLineMinHold ?? 2.0
+        captionIdleFlushAfter = settings.captionIdleFlushAfter ?? 1.5
         selectedAudioInputDeviceID = settings.selectedAudioInputDeviceID
     }
 
@@ -999,18 +1008,43 @@ final class AppState: ObservableObject {
             configuration: captionDisplayConfiguration
         )
 
+        let isRolling = captionDisplayMode == .liveRollUp
+        let configuration = captionDisplayConfiguration
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: targetCharactersPerLine,
+            maxLines: maxLines
+        )
+
         for phrase in phrases {
             let stableSource = corrector.apply(to: phrase.text)
-            let translated = await translate(stableSource, isFinal: true)
+            let translated = await translate(stableSource, isFinal: phrase.isFinal)
             let display = corrector.apply(to: translated)
-            captionDisplayScheduler.enqueue(
-                sourceText: stableSource,
-                displayText: display,
-                now: phrase.committedAt
-            )
+
+            if isRolling {
+                let rolling = StableCaptionPhrase(
+                    text: display,
+                    committedAt: phrase.committedAt,
+                    isFinal: phrase.isFinal
+                )
+                linePacedRoller.ingest(rolling, now: phrase.committedAt)
+            } else {
+                captionDisplayScheduler.enqueue(
+                    sourceText: stableSource,
+                    displayText: display,
+                    now: phrase.committedAt
+                )
+            }
         }
 
-        publishNextCaptionCue(force: isFinal)
+        if isRolling {
+            refreshLinePacedOutput(
+                now: Date(),
+                configuration: configuration
+            )
+        } else {
+            publishNextCaptionCue(force: isFinal)
+        }
+
         if isFinal {
             lastCaptionSnapshotAt = nil
         }
@@ -1082,7 +1116,42 @@ final class AppState: ObservableObject {
         updateCaptionSchedulerStatus()
     }
 
+    private func refreshLinePacedOutput(
+        now: Date,
+        configuration: CaptionDisplayConfiguration
+    ) {
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: targetCharactersPerLine,
+            maxLines: maxLines
+        )
+        let changed = linePacedRoller.tick(
+            now: now,
+            lineMinHold: configuration.lineMinHold,
+            idleFlushAfter: configuration.idleFlushAfter
+        )
+
+        let lines = linePacedRoller.visibleLines
+        let joined = lines.joined(separator: " ")
+
+        if joined != publicCaptionText {
+            publicCaptionText = joined
+        }
+        if lines != captionLayout.lines {
+            captionLayout = CaptionLayout(lines: lines)
+        }
+
+        updateCaptionSchedulerStatus()
+        _ = changed // explicit no-op so the compiler doesn't complain about the unused return
+    }
+
     private func tickCaptionDisplayPipeline() async {
+        if captionDisplayMode == .liveRollUp {
+            refreshLinePacedOutput(
+                now: Date(),
+                configuration: captionDisplayConfiguration
+            )
+            return
+        }
         await flushIdleCaptionTailIfNeeded()
         publishNextCaptionCue()
     }
@@ -1143,6 +1212,11 @@ final class AppState: ObservableObject {
     private func resetCaptionDisplayPipeline(clearOutput: Bool) {
         captionStabilityEngine.reset()
         captionDisplayScheduler.reset()
+        linePacedRoller.reset()
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: targetCharactersPerLine,
+            maxLines: maxLines
+        )
         stableCaptionQueueText = ""
         captionDisplayLatencyText = "0.0s"
         lastDetectedLanguageForDisplay = nil
