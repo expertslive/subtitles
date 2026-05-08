@@ -83,6 +83,17 @@ final class AudioCapturePipeline: @unchecked Sendable {
         onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
     ) async throws {
+        // Recreate the sample stream synchronously, BEFORE any await, so consumers
+        // that read `sampleStream` after this method is dispatched (e.g. the Whisper
+        // feeder task) but before its first suspension point see a fresh stream.
+        // AsyncStream supports only one consumer iterator over its lifetime; without
+        // this, a Stop → Start cycle leaves the new feeder iterating a finished stream
+        // that produces no values.
+        sampleContinuation?.finish()
+        sampleStream = AsyncStream<[Float]> { continuation in
+            self.sampleContinuation = continuation
+        }
+
         guard await requestAudioAccess() else {
             throw AudioCapturePipelineError.microphoneDenied
         }
@@ -169,6 +180,12 @@ final class AudioCapturePipeline: @unchecked Sendable {
         if defaultDeviceListenerInstalled {
             removeDefaultInputDeviceListener()
         }
+
+        // Close the per-session sample stream cleanly. The feeder task's `for await`
+        // loop will terminate naturally on end-of-stream, even before Whisper's stop
+        // explicitly cancels it. The next `start()` recreates a fresh stream.
+        sampleContinuation?.finish()
+        sampleContinuation = nil
     }
 
     func restart(
