@@ -10,7 +10,7 @@ public enum CaptionDisplayMode: String, CaseIterable, Codable, Identifiable, Sen
     public var label: String {
         switch self {
         case .calmBlocks: "Calm Blocks"
-        case .liveRollUp: "Live Roll-up"
+        case .liveRollUp: "Live Roll-up (TV-style)"
         case .fastDraft: "Fast Draft"
         }
     }
@@ -20,7 +20,7 @@ public enum CaptionDisplayMode: String, CaseIterable, Codable, Identifiable, Sen
         case .calmBlocks:
             "Shows stable caption blocks after a short delay."
         case .liveRollUp:
-            "Appends stable phrases into a rolling caption stack."
+            "Line-paced rolling captions like broadcast TV. Each line dwells long enough to read before scrolling up."
         case .fastDraft:
             "Shows raw draft captions immediately for testing."
         }
@@ -74,6 +74,8 @@ public struct CaptionDisplayConfiguration: Equatable, Codable, Sendable {
     public var unstableWordCount: Int
     public var minimumHold: TimeInterval
     public var maximumLatency: TimeInterval
+    public var lineMinHold: TimeInterval
+    public var idleFlushAfter: TimeInterval
 
     public init(
         mode: CaptionDisplayMode = .calmBlocks,
@@ -81,7 +83,9 @@ public struct CaptionDisplayConfiguration: Equatable, Codable, Sendable {
         commitDelay: TimeInterval? = nil,
         unstableWordCount: Int? = nil,
         minimumHold: TimeInterval? = nil,
-        maximumLatency: TimeInterval = 3.0
+        maximumLatency: TimeInterval = 3.0,
+        lineMinHold: TimeInterval = 2.0,
+        idleFlushAfter: TimeInterval = 1.5
     ) {
         self.mode = mode
         self.stability = stability
@@ -89,6 +93,8 @@ public struct CaptionDisplayConfiguration: Equatable, Codable, Sendable {
         self.unstableWordCount = max(0, min(8, unstableWordCount ?? stability.defaultUnstableWordCount))
         self.minimumHold = max(0.4, min(5.0, minimumHold ?? stability.defaultMinimumHold))
         self.maximumLatency = max(self.commitDelay, min(8.0, maximumLatency))
+        self.lineMinHold = max(0.5, min(5.0, lineMinHold))
+        self.idleFlushAfter = max(0.3, min(4.0, idleFlushAfter))
     }
 }
 
