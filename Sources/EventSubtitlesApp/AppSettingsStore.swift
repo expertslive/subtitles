@@ -32,6 +32,8 @@ struct AppSettings: Codable {
     var captionUnstableWordCount: Int?
     var captionMinimumHold: Double?
     var captionMaximumLatency: Double?
+    var captionLineMinHold: Double?
+    var captionIdleFlushAfter: Double?
     var selectedAudioInputDeviceID: String?
 }
 
