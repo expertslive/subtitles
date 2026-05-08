@@ -296,6 +296,105 @@ private func testStabilityFallsBackToPrefixOnlyWhenWordsMissing() {
     )
 }
 
+private func testLineBuilderEmitsCompletedLineWhenBufferFull() {
+    var builder = LineBuilder(targetCharactersPerLine: 20)
+    let now = Date(timeIntervalSince1970: 1)
+
+    let emitted1 = builder.ingest("Welcome to the stage", now: now)
+    expect(emitted1.isEmpty, "first phrase fits and should not emit")
+
+    let emitted2 = builder.ingest("everyone today", now: now.addingTimeInterval(0.5))
+    expect(
+        emitted2 == ["Welcome to the stage"],
+        "next word would overflow → emit completed line at the word boundary"
+    )
+
+    expect(builder.pendingBuffer == "everyone today", "remaining words form the new buffer")
+}
+
+private func testLineBuilderFlushesOnFinalSegment() {
+    var builder = LineBuilder(targetCharactersPerLine: 50)
+    let now = Date(timeIntervalSince1970: 1)
+    _ = builder.ingest("Half a sentence", now: now)
+    let emitted = builder.ingestFinal("done.", now: now.addingTimeInterval(0.2))
+    expect(
+        emitted == ["Half a sentence done."],
+        "final segment must flush the buffer even if not full"
+    )
+    expect(builder.pendingBuffer.isEmpty, "buffer is empty after final flush")
+}
+
+private func testLineBuilderIdleFlushAfterTimeout() {
+    var builder = LineBuilder(targetCharactersPerLine: 50)
+    let start = Date(timeIntervalSince1970: 1)
+    _ = builder.ingest("Trailing words", now: start)
+
+    let earlyTick = builder.tick(now: start.addingTimeInterval(1.0), idleFlushAfter: 1.5)
+    expect(earlyTick.isEmpty, "tick before idle threshold does not flush")
+
+    let lateTick = builder.tick(now: start.addingTimeInterval(1.6), idleFlushAfter: 1.5)
+    expect(lateTick == ["Trailing words"], "tick after idle threshold flushes the buffer")
+    expect(builder.pendingBuffer.isEmpty, "buffer cleared after idle flush")
+}
+
+private func testLineStackHoldsBeforeScrolling() {
+    var stack = LineStack(maxLines: 2)
+    let t0 = Date(timeIntervalSince1970: 100)
+
+    stack.push("First", now: t0)
+    expect(stack.visibleLines == ["First"], "stack fills below capacity immediately")
+
+    stack.push("Second", now: t0.addingTimeInterval(0.1))
+    expect(stack.visibleLines == ["First", "Second"], "second line fills the stack")
+
+    stack.push("Third", now: t0.addingTimeInterval(0.5))
+    _ = stack.tick(now: t0.addingTimeInterval(0.6), lineMinHold: 2.0)
+    expect(
+        stack.visibleLines == ["First", "Second"],
+        "stack is full and oldest line not yet held long enough → 'Third' stays queued"
+    )
+
+    _ = stack.tick(now: t0.addingTimeInterval(2.2), lineMinHold: 2.0)
+    expect(
+        stack.visibleLines == ["Second", "Third"],
+        "after lineMinHold elapses, oldest scrolls off and queued line enters"
+    )
+}
+
+private func testLineStackRespectsMaxLines() {
+    var stack = LineStack(maxLines: 2)
+    let t0 = Date(timeIntervalSince1970: 100)
+    stack.push("A", now: t0)
+    stack.push("B", now: t0.addingTimeInterval(0.1))
+    expect(stack.visibleLines == ["A", "B"], "stack at capacity")
+    expect(stack.pendingCount == 0, "no queue while filling")
+}
+
+private func testLinePacedRollerIntegration() {
+    var roller = LinePacedRoller(targetCharactersPerLine: 24, maxLines: 2)
+    let t0 = Date(timeIntervalSince1970: 1000)
+
+    // Phrase 1: short, doesn't fill the line
+    roller.ingest(StableCaptionPhrase(text: "Hello to everyone", committedAt: t0, isFinal: false), now: t0)
+    _ = roller.tick(now: t0.addingTimeInterval(0.1), lineMinHold: 2.0, idleFlushAfter: 1.5)
+    expect(roller.visibleLines.isEmpty, "phrase pending in builder, no line emitted yet")
+
+    // Phrase 2: pushes us past 24 chars → emits "Hello to everyone"
+    roller.ingest(StableCaptionPhrase(text: "and welcome to the stage", committedAt: t0.addingTimeInterval(0.5), isFinal: false), now: t0.addingTimeInterval(0.5))
+    _ = roller.tick(now: t0.addingTimeInterval(0.6), lineMinHold: 2.0, idleFlushAfter: 1.5)
+    expect(
+        roller.visibleLines == ["Hello to everyone"],
+        "first overflowed line appears immediately while stack has room"
+    )
+
+    // Idle flush emits the trailing buffer
+    _ = roller.tick(now: t0.addingTimeInterval(2.5), lineMinHold: 2.0, idleFlushAfter: 1.5)
+    expect(
+        roller.visibleLines == ["Hello to everyone", "and welcome to the stage"],
+        "idle flush emits second line and stack fills"
+    )
+}
+
 testComposerKeepsOnlyConfiguredNumberOfLines()
 testComposerNormalizesWhitespace()
 testGlossaryCorrectorAppliesCaseInsensitiveCorrections()
@@ -309,5 +408,11 @@ testStabilityEngineResetClearsCommittedPrefix()
 testStabilityCommitsHighConfidenceWordsImmediately()
 testStabilityHoldsLowConfidenceWordsUntilAgreement()
 testStabilityFallsBackToPrefixOnlyWhenWordsMissing()
+testLineBuilderEmitsCompletedLineWhenBufferFull()
+testLineBuilderFlushesOnFinalSegment()
+testLineBuilderIdleFlushAfterTimeout()
+testLineStackHoldsBeforeScrolling()
+testLineStackRespectsMaxLines()
+testLinePacedRollerIntegration()
 
 print("Smoke tests passed")
