@@ -80,6 +80,7 @@ final class AppState: ObservableObject {
     """
 
     @Published var manualCaption = ""
+    @Published var outputBlanked = false
     @Published var sessionLogStatus = "No active session"
     @Published var sessionDirectoryPath: String?
     @Published var sessionSegmentCount = 0
@@ -184,6 +185,19 @@ final class AppState: ObservableObject {
 
     func clearCaptions() {
         resetCaptionDisplayPipeline(clearOutput: true)
+    }
+
+    func panicBlank() {
+        outputBlanked = true
+        resetCaptionDisplayPipeline(clearOutput: true)
+    }
+
+    func toggleOutputBlank() {
+        outputBlanked.toggle()
+    }
+
+    func unblankOutput() {
+        outputBlanked = false
     }
 
     func showOutputWindow() {

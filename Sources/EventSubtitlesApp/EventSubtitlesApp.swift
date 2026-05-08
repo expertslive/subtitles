@@ -31,6 +31,18 @@ struct EventSubtitlesApp: App {
                 }
                 .keyboardShortcut(".", modifiers: .command)
                 .disabled(!appState.isRunning)
+
+                Divider()
+
+                Button("Panic Blank") {
+                    appState.panicBlank()
+                }
+                .keyboardShortcut("k", modifiers: .command)
+
+                Button(appState.outputBlanked ? "Unblank Output" : "Blank Output") {
+                    appState.toggleOutputBlank()
+                }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
             }
 
             CommandMenu("Workspace") {

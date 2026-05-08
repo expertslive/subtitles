@@ -9,7 +9,9 @@ struct SubtitleOutputView: View {
         ZStack {
             background
 
-            positionedCaptions
+            if !state.outputBlanked {
+                positionedCaptions
+            }
         }
     }
 

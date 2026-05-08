@@ -96,6 +96,14 @@ extension OperatorView {
                     .keyboardShortcut("r", modifiers: .command)
                 }
 
+                ToolbarRoundButton(
+                    title: state.outputBlanked ? "Unblank output" : "Panic blank",
+                    systemImage: state.outputBlanked ? "eye" : "eye.slash.fill",
+                    tint: state.outputBlanked ? .gray : .orange,
+                    action: state.toggleOutputBlank
+                )
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+
                 HStack(spacing: 8) {
                     ToolbarIconButton(
                         title: "Show output window",
