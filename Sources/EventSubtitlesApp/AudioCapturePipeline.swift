@@ -53,6 +53,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
     private var sampleContinuation: AsyncStream<[Float]>.Continuation?
     private var configChangeObserver: NSObjectProtocol?
     private var defaultDeviceListenerInstalled = false
+    private var defaultInputListenerBlock: AudioObjectPropertyListenerBlock?
     private var onConfigurationDidChange: (@Sendable () -> Void)?
 
     /// Async stream of mono 16 kHz Float samples. Tap callbacks `yield` into here.
@@ -260,25 +261,33 @@ final class AudioCapturePipeline: @unchecked Sendable {
 
     private func installDefaultInputDeviceListener() {
         guard !defaultDeviceListenerInstalled else { return }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.onConfigurationDidChange?()
+        }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &defaultInputAddress,
-            DispatchQueue.main
-        ) { [weak self] _, _ in
-            self?.onConfigurationDidChange?()
-        }
+            DispatchQueue.main,
+            block
+        )
         if status == noErr {
+            defaultInputListenerBlock = block
             defaultDeviceListenerInstalled = true
         }
     }
 
     private func removeDefaultInputDeviceListener() {
+        guard let block = defaultInputListenerBlock else {
+            defaultDeviceListenerInstalled = false
+            return
+        }
         AudioObjectRemovePropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &defaultInputAddress,
             DispatchQueue.main,
-            { _, _ in }
+            block
         )
+        defaultInputListenerBlock = nil
         defaultDeviceListenerInstalled = false
     }
 
