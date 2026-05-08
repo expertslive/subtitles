@@ -1,12 +1,12 @@
+import AppKit
 import SwiftUI
 
 struct SubtitleOutputView: View {
     @EnvironmentObject private var state: AppState
     var ignoresSafeArea = true
     var animatesCaptionChanges = true
-    /// Set to true on the actual output window only. The operator-UI previews
-    /// (Live, Style, Output workspaces) leave this false — their narrower frames
-    /// must not drive the audience-facing line wrap.
+    /// Kept for source compatibility with prior versions. The renderer now wraps
+    /// per-instance using the view's own pixel width, so this flag has no effect.
     var governsLayout = false
 
     var body: some View {
@@ -15,17 +15,7 @@ struct SubtitleOutputView: View {
                 background
 
                 if !state.outputBlanked {
-                    positionedCaptions
-                }
-            }
-            .onAppear {
-                if governsLayout {
-                    state.applyOutputRenderWidth(geo.size.width)
-                }
-            }
-            .onChange(of: geo.size.width) { _, newWidth in
-                if governsLayout {
-                    state.applyOutputRenderWidth(newWidth)
+                    positionedCaptions(availableWidth: geo.size.width)
                 }
             }
         }
@@ -41,13 +31,13 @@ struct SubtitleOutputView: View {
         }
     }
 
-    private var positionedCaptions: some View {
+    private func positionedCaptions(availableWidth: CGFloat) -> some View {
         VStack {
             if state.captionPosition != .top {
                 Spacer(minLength: state.safeMargin)
             }
 
-            captionLines
+            captionLines(availableWidth: availableWidth)
 
             if state.captionPosition != .bottom {
                 Spacer(minLength: state.safeMargin)
@@ -62,13 +52,20 @@ struct SubtitleOutputView: View {
         .animation(animatesCaptionChanges ? .easeOut(duration: 0.12) : nil, value: state.captionOffsetY)
     }
 
-    private var captionLines: some View {
-        // Always render at the operator's selected fontSize. No auto-scaling.
-        // No truncation either — every committed word must reach the audience.
-        // Lines are pre-wrapped to `targetCharactersPerLine`; if the operator
-        // selects a font size whose pixel width forces individual lines to
-        // re-wrap, the block grows taller rather than dropping words.
-        Text(state.captionLayout.text)
+    private func captionLines(availableWidth: CGFloat) -> some View {
+        // Render exactly `maxLines` visual rows. The line builder's logical
+        // lines are joined into a continuous word stream, then re-wrapped here
+        // using NSAttributedString pixel measurements at the view's actual
+        // width and the operator's chosen font/size. The `last(maxLines)` keeps
+        // the most recent words (TV-style scroll: oldest words leave the top).
+        let textWidth = max(availableWidth - 2 * state.safeMargin, 100)
+        let wrapped = pixelWrappedLines(
+            text: state.captionLayout.lines.joined(separator: " "),
+            availableWidth: textWidth,
+            maxLines: state.maxLines
+        )
+
+        return Text(wrapped.joined(separator: "\n"))
             .font(.custom(state.fontName, size: state.fontSize).weight(.bold))
             .foregroundStyle(state.foregroundColor)
             .multilineTextAlignment(.center)
@@ -82,5 +79,44 @@ struct SubtitleOutputView: View {
                 y: 2
             )
             .frame(maxWidth: .infinity)
+    }
+
+    /// Greedy word-fill wrap based on actual pixel width at the operator's font.
+    /// Returns up to `maxLines` lines, taking the most recent words when the
+    /// text doesn't fit (TV-style scroll-up). A single word longer than
+    /// `availableWidth` is emitted on its own line rather than dropped.
+    private func pixelWrappedLines(
+        text: String,
+        availableWidth: CGFloat,
+        maxLines: Int
+    ) -> [String] {
+        let words = text
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        guard !words.isEmpty, maxLines > 0 else { return [] }
+
+        let baseFont = NSFont(name: state.fontName, size: CGFloat(state.fontSize))
+            ?? NSFont.systemFont(ofSize: CGFloat(state.fontSize))
+        let descriptor = baseFont.fontDescriptor.withSymbolicTraits(.bold)
+        let font = NSFont(descriptor: descriptor, size: CGFloat(state.fontSize)) ?? baseFont
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+
+        var lines: [String] = []
+        var current = ""
+        for word in words {
+            let candidate = current.isEmpty ? word : "\(current) \(word)"
+            let width = (candidate as NSString).size(withAttributes: attrs).width
+            if width <= availableWidth || current.isEmpty {
+                current = candidate
+            } else {
+                lines.append(current)
+                current = word
+            }
+        }
+        if !current.isEmpty {
+            lines.append(current)
+        }
+
+        return Array(lines.suffix(maxLines))
     }
 }
