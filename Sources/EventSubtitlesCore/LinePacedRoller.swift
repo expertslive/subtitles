@@ -142,6 +142,7 @@ public struct LineStack: Sendable {
 public struct LinePacedRoller: Sendable {
     public var lineBuilder: LineBuilder
     public var lineStack: LineStack
+    private var emittedSinceDrain: [String] = []
 
     public init(targetCharactersPerLine: Int, maxLines: Int) {
         self.lineBuilder = LineBuilder(targetCharactersPerLine: targetCharactersPerLine)
@@ -155,11 +156,21 @@ public struct LinePacedRoller: Sendable {
     public mutating func reset() {
         lineBuilder.reset()
         lineStack.reset()
+        emittedSinceDrain.removeAll()
     }
 
     public mutating func updateLayout(targetCharactersPerLine: Int, maxLines: Int) {
         lineBuilder.targetCharactersPerLine = max(8, targetCharactersPerLine)
         lineStack.maxLines = max(1, maxLines)
+    }
+
+    /// Returns lines that the line builder has emitted since the last call,
+    /// then clears the internal accumulator. Use this to record the displayed
+    /// transcript history for the operator.
+    public mutating func drainEmittedLines() -> [String] {
+        let result = emittedSinceDrain
+        emittedSinceDrain.removeAll()
+        return result
     }
 
     /// Ingest a phrase from the stability engine. If the incoming phrase would
@@ -175,6 +186,7 @@ public struct LinePacedRoller: Sendable {
         if !lineBuilder.pendingBuffer.isEmpty && combined.count > lineBuilder.targetCharactersPerLine {
             if let flushed = lineBuilder.flushBuffer() {
                 lineStack.push(flushed, now: now)
+                emittedSinceDrain.append(flushed)
             }
         }
         let emitted: [String]
@@ -185,6 +197,7 @@ public struct LinePacedRoller: Sendable {
         }
         for line in emitted {
             lineStack.push(line, now: now)
+            emittedSinceDrain.append(line)
         }
     }
 
@@ -199,6 +212,7 @@ public struct LinePacedRoller: Sendable {
         let flushed = lineBuilder.tick(now: now, idleFlushAfter: idleFlushAfter)
         for line in flushed {
             lineStack.push(line, now: now)
+            emittedSinceDrain.append(line)
         }
         return lineStack.tick(now: now, lineMinHold: lineMinHold)
     }

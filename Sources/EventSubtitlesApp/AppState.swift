@@ -1147,6 +1147,20 @@ final class AppState: ObservableObject {
             idleFlushAfter: configuration.idleFlushAfter
         )
 
+        // Record any lines the line builder emitted since the last refresh into
+        // the history / session log. This is the rolling-mode equivalent of
+        // calmBlocks's recordDisplayedEvent on each scheduler cue.
+        let emittedLines = linePacedRoller.drainEmittedLines()
+        for line in emittedLines {
+            let event = TranscriptEvent(
+                sourceText: line,
+                displayText: line,
+                isFinal: true,
+                createdAt: now
+            )
+            recordDisplayedEvent(event, detectedLanguage: lastDetectedLanguageForDisplay)
+        }
+
         let lines = linePacedRoller.visibleLines
         let joined = lines.joined(separator: " ")
 
