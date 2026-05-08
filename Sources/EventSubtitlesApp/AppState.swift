@@ -199,7 +199,11 @@ final class AppState: ObservableObject {
         audioLevel = 0
         isRunning = false
         engineStatus = transcriptionEngine.idleStatusLabel
-        publishNextCaptionCue(force: true)
+        if captionDisplayMode == .liveRollUp {
+            flushLinePacedOutput(now: Date())
+        } else {
+            publishNextCaptionCue(force: true)
+        }
         stopCaptionDisplayTimer()
         stopSleepPrevention()
         stopSessionTimer()
@@ -313,7 +317,7 @@ final class AppState: ObservableObject {
             do {
                 try await self.capturePipeline.restart(
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
-                    recordingURL: nil // do NOT rotate the CAF mid-session; keep recording disabled on restart
+                    recordingURL: nil
                 )
                 self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
                 if priorDescription != self.audioInputDescription {
@@ -1220,6 +1224,31 @@ final class AppState: ObservableObject {
         _ = changed // explicit no-op so the compiler doesn't complain about the unused return
     }
 
+    private func flushLinePacedOutput(now: Date) {
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
+            maxLines: maxLines
+        )
+        _ = linePacedRoller.tick(
+            now: now,
+            lineMinHold: 0,
+            idleFlushAfter: 0
+        )
+        refreshLinePacedOutput(
+            now: now,
+            configuration: CaptionDisplayConfiguration(
+                mode: captionDisplayMode,
+                stability: captionStabilityLevel,
+                commitDelay: captionCommitDelay,
+                unstableWordCount: captionUnstableWordCount,
+                minimumHold: captionMinimumHold,
+                maximumLatency: captionMaximumLatency,
+                lineMinHold: 0,
+                idleFlushAfter: 0
+            )
+        )
+    }
+
     private func tickCaptionDisplayPipeline() async {
         if captionDisplayMode == .liveRollUp {
             refreshLinePacedOutput(
@@ -1367,6 +1396,16 @@ final class AppState: ObservableObject {
     }
 
     private func recomputeCaption() {
+        if captionDisplayMode == .liveRollUp {
+            linePacedRoller.updateLayout(
+                targetCharactersPerLine: effectiveTargetCharactersPerLine,
+                maxLines: maxLines
+            )
+            captionLayout = CaptionLayout(lines: linePacedRoller.visibleLines)
+            publicCaptionText = captionLayout.text.replacingOccurrences(of: "\n", with: " ")
+            return
+        }
+
         let composer = CaptionComposer(
             maxLines: maxLines,
             targetCharactersPerLine: targetCharactersPerLine

@@ -74,6 +74,24 @@ final class AudioCapturePipeline: @unchecked Sendable {
         onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
     ) async throws {
+        try await start(
+            inputDeviceID: inputDeviceID,
+            recordingURL: recordingURL,
+            preserveExistingRecording: false,
+            onLevel: onLevel,
+            onSamples: onSamples,
+            onConfigurationChange: onConfigurationChange
+        )
+    }
+
+    private func start(
+        inputDeviceID: AudioDeviceID?,
+        recordingURL: URL?,
+        preserveExistingRecording: Bool,
+        onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
+        onSamples: @escaping @Sendable ([Float]) -> Void,
+        onConfigurationChange: @escaping @Sendable () -> Void
+    ) async throws {
         guard await requestAudioAccess() else {
             throw AudioCapturePipelineError.microphoneDenied
         }
@@ -105,17 +123,8 @@ final class AudioCapturePipeline: @unchecked Sendable {
         self.converter = converter
 
         if let recordingURL {
-            do {
-                recordingFile = try AVAudioFile(
-                    forWriting: recordingURL,
-                    settings: whisperFormat.settings,
-                    commonFormat: .pcmFormatFloat32,
-                    interleaved: false
-                )
-            } catch {
-                throw AudioCapturePipelineError.recordingUnavailable(error.localizedDescription)
-            }
-        } else {
+            recordingFile = try openRecordingFile(at: recordingURL)
+        } else if !preserveExistingRecording {
             recordingFile = nil
         }
 
@@ -135,6 +144,10 @@ final class AudioCapturePipeline: @unchecked Sendable {
     }
 
     func stop() {
+        stop(keepRecordingFile: false)
+    }
+
+    private func stop(keepRecordingFile: Bool) {
         stateLock.lock()
         guard running else {
             stateLock.unlock()
@@ -148,7 +161,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         converter = nil
 
         let drained = recordingFile
-        recordingFile = nil
+        if !keepRecordingFile {
+            recordingFile = nil
+        }
         writeQueue.sync {
             // Force the queue to drain any in-flight writes referencing `drained`.
             _ = drained
@@ -172,13 +187,15 @@ final class AudioCapturePipeline: @unchecked Sendable {
         let level = self.levelHandler
         let samples = self.samplesHandler
         let onChange = self.onConfigurationDidChange
-        stop()
+        let shouldPreserveRecording = recordingURL == nil && recordingFile != nil
+        stop(keepRecordingFile: shouldPreserveRecording)
         guard let level, let samples, let onChange else {
             throw AudioCapturePipelineError.inputUnavailable
         }
         try await start(
             inputDeviceID: inputDeviceID,
             recordingURL: recordingURL,
+            preserveExistingRecording: shouldPreserveRecording,
             onLevel: level,
             onSamples: samples,
             onConfigurationChange: onChange
@@ -203,15 +220,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
 
         var error: NSError?
-        var inputProvided = false
+        let inputProvider = SingleBufferConverterInput(buffer: buffer)
         let status = converter.convert(to: outBuffer, error: &error) { _, outStatus in
-            if inputProvided {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-            inputProvided = true
-            outStatus.pointee = .haveData
-            return buffer
+            inputProvider.provide(outStatus: outStatus)
         }
 
         guard status != .error,
@@ -243,9 +254,24 @@ final class AudioCapturePipeline: @unchecked Sendable {
         samplesHandler?(samples)
 
         // Hand the converted PCM buffer to the write queue (off the audio thread).
-        let bufferCopy = outBuffer
-        writeQueue.async { [weak self] in
-            try? self?.recordingFile?.write(from: bufferCopy)
+        if let file = recordingFile {
+            let bufferCopy = outBuffer
+            writeQueue.async {
+                try? file.write(from: bufferCopy)
+            }
+        }
+    }
+
+    private func openRecordingFile(at url: URL) throws -> AVAudioFile {
+        do {
+            return try AVAudioFile(
+                forWriting: url,
+                settings: whisperFormat.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+        } catch {
+            throw AudioCapturePipelineError.recordingUnavailable(error.localizedDescription)
         }
     }
 
@@ -332,5 +358,29 @@ final class AudioCapturePipeline: @unchecked Sendable {
         @unknown default:
             return false
         }
+    }
+}
+
+private final class SingleBufferConverterInput: @unchecked Sendable {
+    private let lock = NSLock()
+    private let buffer: AVAudioPCMBuffer
+    private var didProvide = false
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func provide(outStatus: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !didProvide else {
+            outStatus.pointee = .noDataNow
+            return nil
+        }
+
+        didProvide = true
+        outStatus.pointee = .haveData
+        return buffer
     }
 }
