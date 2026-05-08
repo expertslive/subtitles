@@ -8,14 +8,16 @@ struct AudioWorkspace: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top, spacing: 18) {
                     WorkspaceSection(title: "Input") {
-                        audioInputRow
+                        audioInputPicker
+                        audioInputStatusRow
 
                         Button {
-                            state.refreshAudioInputDevice()
+                            state.useSystemDefaultAudioInput()
                         } label: {
-                            Label("Refresh input", systemImage: "arrow.clockwise")
+                            Label("Use system default", systemImage: "mic")
                                 .frame(maxWidth: .infinity)
                         }
+                        .disabled(state.selectedAudioInputDeviceID == nil || state.isRunning)
                     }
                     .frame(width: 360)
 
@@ -76,17 +78,66 @@ struct AudioWorkspace: View {
         .navigationTitle("Audio")
     }
 
-    private var audioInputRow: some View {
+    private var audioInputPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Audio interface")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Picker(
+                    "Audio interface",
+                    selection: Binding<String?>(
+                        get: { state.selectedAudioInputDeviceID },
+                        set: { state.setSelectedAudioInputDeviceID($0) }
+                    )
+                ) {
+                    Text("System default").tag(String?.none)
+
+                    ForEach(state.audioInputDevices, id: \.id) { device in
+                        Text(device.displayName).tag(Optional(device.id))
+                    }
+
+                    if let selectedDeviceID = state.selectedAudioInputDeviceID,
+                       !state.audioInputDevices.contains(where: { $0.id == selectedDeviceID }) {
+                        Text("Unavailable interface").tag(Optional(selectedDeviceID))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .disabled(state.isRunning)
+
+                Button {
+                    state.refreshAudioInputDevice()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: 18)
+                }
+                .help("Refresh input devices")
+            }
+        }
+    }
+
+    private var audioInputStatusRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "waveform")
                 .foregroundStyle(.secondary)
-            Text(state.audioInputDescription)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(state.audioInputDescription)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(state.audioInputSelectionStatus)
+                    .foregroundStyle(statusColor)
+                    .lineLimit(1)
+            }
             Spacer()
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    private var statusColor: Color {
+        state.audioInputSelectionStatus.contains("unavailable") ? .orange : .secondary
     }
 
     private var dbText: String {

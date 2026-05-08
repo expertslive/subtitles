@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import Darwin
 import EventSubtitlesCore
 import SwiftUI
@@ -17,7 +18,11 @@ final class AppState: ObservableObject {
 
     @Published var isRunning = false
     @Published var audioLevel = 0.0
+    @Published var audioInputDevices: [AudioInputDeviceInfo] = []
+    @Published var selectedAudioInputDeviceID: String?
+    @Published var effectiveAudioInputDeviceID: String?
     @Published var audioInputDescription = "Input unknown"
+    @Published var audioInputSelectionStatus = "Input unknown"
     @Published var engineStatus = "Simulator idle"
     @Published var errorMessage: String?
     @Published var sessionName = "Main stage"
@@ -99,6 +104,7 @@ final class AppState: ObservableObject {
     private var sessionTimer: Timer?
     private var captionDisplayTimer: Timer?
     private var lastDetectedLanguageForDisplay: SourceLanguage?
+    private var lastAudioLevelPublishedAt = Date.distantPast
 
     init() {
         loadSettings()
@@ -129,9 +135,12 @@ final class AppState: ObservableObject {
             }
 
             do {
-                try await self.audioMonitor.start(recordingURL: self.sessionRecorder.audioRecordingURL) { [weak self] level in
+                try await self.audioMonitor.start(
+                    inputDeviceID: self.selectedAudioInputDeviceForCapture(),
+                    recordingURL: self.sessionRecorder.audioRecordingURL
+                ) { [weak self] level in
                     Task { @MainActor [weak self] in
-                        self?.audioLevel = Double(level)
+                        self?.publishAudioLevel(Double(level))
                     }
                 }
             } catch {
@@ -216,12 +225,54 @@ final class AppState: ObservableObject {
     }
 
     func refreshAudioInputDevice() {
-        if let input = AudioDeviceInspector.defaultInputDevice() {
-            let rate = input.sampleRate > 0 ? " \(Int(input.sampleRate)) Hz" : ""
-            audioInputDescription = "\(input.name)\(rate)"
+        let devices = AudioDeviceInspector.inputDevices()
+        let defaultDeviceID = AudioDeviceInspector.defaultInputDeviceID()
+        let result = AudioInputSelectionResolver.resolve(
+            selectedDeviceID: selectedAudioInputDeviceID,
+            devices: devices.map { AudioInputSelectionDevice(id: $0.id, name: $0.name) },
+            defaultDeviceID: defaultDeviceID
+        )
+
+        audioInputDevices = devices
+        effectiveAudioInputDeviceID = result.effectiveDeviceID
+
+        if let effectiveDevice = devices.first(where: { $0.id == result.effectiveDeviceID }) {
+            audioInputDescription = effectiveDevice.displayName
         } else {
             audioInputDescription = "Input unknown"
         }
+
+        audioInputSelectionStatus = audioInputStatusText(for: result)
+    }
+
+    func setSelectedAudioInputDeviceID(_ deviceID: String?) {
+        selectedAudioInputDeviceID = deviceID
+        refreshAudioInputDevice()
+        saveSettings()
+    }
+
+    func useSystemDefaultAudioInput() {
+        setSelectedAudioInputDeviceID(nil)
+    }
+
+    private func selectedAudioInputDeviceForCapture() -> AudioDeviceID? {
+        refreshAudioInputDevice()
+        guard let selectedAudioInputDeviceID,
+              effectiveAudioInputDeviceID == selectedAudioInputDeviceID else {
+            return nil
+        }
+
+        return AudioDeviceInspector.inputDevice(id: selectedAudioInputDeviceID)?.deviceID
+    }
+
+    private func publishAudioLevel(_ level: Double) {
+        let now = Date()
+        guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 15.0 || level > 0.92 else {
+            return
+        }
+
+        lastAudioLevelPublishedAt = now
+        audioLevel = level
     }
 
     var systemMemoryText: String {
@@ -309,7 +360,8 @@ final class AppState: ObservableObject {
                 captionCommitDelay: captionCommitDelay,
                 captionUnstableWordCount: captionUnstableWordCount,
                 captionMinimumHold: captionMinimumHold,
-                captionMaximumLatency: captionMaximumLatency
+                captionMaximumLatency: captionMaximumLatency,
+                selectedAudioInputDeviceID: selectedAudioInputDeviceID
             )
         )
     }
@@ -382,6 +434,20 @@ final class AppState: ObservableObject {
         captionUnstableWordCount = settings.captionUnstableWordCount ?? captionStabilityLevel.defaultUnstableWordCount
         captionMinimumHold = settings.captionMinimumHold ?? captionStabilityLevel.defaultMinimumHold
         captionMaximumLatency = settings.captionMaximumLatency ?? 3.0
+        selectedAudioInputDeviceID = settings.selectedAudioInputDeviceID
+    }
+
+    private func audioInputStatusText(for result: AudioInputSelectionResult) -> String {
+        switch result.status {
+        case .usingSystemDefault:
+            return "Using system default"
+        case .usingOverride:
+            return "Using selected interface"
+        case .overrideUnavailable:
+            return "Selected interface unavailable; using system default"
+        case .noInputAvailable:
+            return "No input device available"
+        }
     }
 
     private func exportGlossary(format: GlossaryExportFormat) {
@@ -777,6 +843,7 @@ final class AppState: ObservableObject {
                 do {
                     self.whisperKitTranscriber.setModelName(self.whisperModelName)
                     try await self.whisperKitTranscriber.start(
+                        inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
                             glossary: self.glossaryText

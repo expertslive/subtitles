@@ -2,13 +2,24 @@ import SwiftUI
 
 struct SubtitleOutputView: View {
     @EnvironmentObject private var state: AppState
+    var ignoresSafeArea = true
+    var animatesCaptionChanges = true
 
     var body: some View {
         ZStack {
-            state.backgroundColor
-                .ignoresSafeArea()
+            background
 
             positionedCaptions
+        }
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        if ignoresSafeArea {
+            state.backgroundColor
+                .ignoresSafeArea()
+        } else {
+            state.backgroundColor
         }
     }
 
@@ -27,10 +38,10 @@ struct SubtitleOutputView: View {
         .padding(.horizontal, state.safeMargin)
         .padding(.vertical, state.safeMargin)
         .offset(x: state.captionOffsetX, y: state.captionOffsetY)
-        .animation(.easeOut(duration: 0.18), value: state.captionLayout.text)
-        .animation(.easeOut(duration: 0.18), value: state.captionPosition.rawValue)
-        .animation(.easeOut(duration: 0.12), value: state.captionOffsetX)
-        .animation(.easeOut(duration: 0.12), value: state.captionOffsetY)
+        .animation(animatesCaptionChanges ? .easeOut(duration: 0.18) : nil, value: state.captionLayout.text)
+        .animation(animatesCaptionChanges ? .easeOut(duration: 0.18) : nil, value: state.captionPosition.rawValue)
+        .animation(animatesCaptionChanges ? .easeOut(duration: 0.12) : nil, value: state.captionOffsetX)
+        .animation(animatesCaptionChanges ? .easeOut(duration: 0.12) : nil, value: state.captionOffsetY)
     }
 
     private var captionLines: some View {

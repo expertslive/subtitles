@@ -25,6 +25,7 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 - automatic sleep prevention while a subtitle session is running
 - local pipeline interfaces for ASR and translation engines
 - task-focused capture modes for demo captions, live WhisperKit subtitles, and audio-only recording
+- app-level audio input selector with system-default fallback
 - WhisperKit/Core ML live ASR engine path
 - glossary term editor with add/edit/delete rows, alias groups, validation, suggestions, and JSON/CSV import/export
 - timestamped session logging with transcripts, SRTs, JSONL segments, and raw input audio
@@ -56,7 +57,7 @@ swift run PrepareWhisperModel large-v3-v20240930_626MB
 GitHub releases include a zipped macOS app bundle:
 
 ```text
-EventSubtitles-v3.0.0-macos-arm64.zip
+EventSubtitles-v3.1.0-macos-arm64.zip
 ```
 
 Unzip it and launch `EventSubtitles.app`. The app is ad-hoc signed for local testing, so macOS may require opening it from Finder with Control-click > Open the first time.
@@ -85,6 +86,7 @@ Each session folder contains:
 
 ```bash
 swift run EventSubtitlesSmokeTests
+swift run EventSubtitlesCoreUnitTests
 ```
 
 ## Model Plan

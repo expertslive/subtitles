@@ -221,15 +221,19 @@ struct PreviewPanel: View {
             Text(title)
                 .font(.headline)
 
-            SubtitleOutputView()
-                .environmentObject(state)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .frame(maxHeight: maxHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.secondary.opacity(0.25))
-                }
+            GeometryReader { proxy in
+                SubtitleOutputView(ignoresSafeArea: false, animatesCaptionChanges: false)
+                    .environmentObject(state)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+            }
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .frame(maxHeight: maxHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.secondary.opacity(0.25))
+            }
         }
     }
 }
