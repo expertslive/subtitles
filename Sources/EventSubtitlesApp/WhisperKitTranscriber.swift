@@ -63,8 +63,8 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             sessionName: configuration.sessionName,
             glossary: configuration.glossary
         )
-        let promptTokens: [Int] = promptText.isEmpty
-            ? []
+        let promptTokens: [Int]? = promptText.isEmpty
+            ? nil
             : Array(tokenizer.encode(text: " " + promptText).suffix(224))
 
         let decodeOptions = DecodingOptions(
