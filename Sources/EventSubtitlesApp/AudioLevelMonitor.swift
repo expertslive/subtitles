@@ -1,4 +1,6 @@
 @preconcurrency import AVFoundation
+import AudioToolbox
+import CoreAudio
 import Foundation
 
 enum AudioLevelMonitorError: LocalizedError {
@@ -24,6 +26,7 @@ final class AudioLevelMonitor: @unchecked Sendable {
     private var recordingFile: AVAudioFile?
 
     func start(
+        inputDeviceID: AudioDeviceID? = nil,
         recordingURL: URL? = nil,
         onLevel: @escaping @Sendable (Float) -> Void
     ) async throws {
@@ -36,6 +39,10 @@ final class AudioLevelMonitor: @unchecked Sendable {
         }
 
         let inputNode = engine.inputNode
+        if let inputDeviceID {
+            try setInputDevice(inputDeviceID, on: inputNode)
+        }
+
         let format = inputNode.outputFormat(forBus: 0)
         guard format.channelCount > 0 else {
             throw AudioLevelMonitorError.inputUnavailable
@@ -117,6 +124,26 @@ final class AudioLevelMonitor: @unchecked Sendable {
             }
         @unknown default:
             return false
+        }
+    }
+
+    private func setInputDevice(_ deviceID: AudioDeviceID, on inputNode: AVAudioInputNode) throws {
+        guard let audioUnit = inputNode.audioUnit else {
+            throw AudioLevelMonitorError.recordingUnavailable("Input audio unit is unavailable.")
+        }
+
+        var deviceID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+
+        guard status == noErr else {
+            throw AudioLevelMonitorError.recordingUnavailable("Selected input device could not be used (\(status)).")
         }
     }
 }

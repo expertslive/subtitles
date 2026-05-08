@@ -32,6 +32,7 @@ struct AppSettings: Codable {
     var captionUnstableWordCount: Int?
     var captionMinimumHold: Double?
     var captionMaximumLatency: Double?
+    var selectedAudioInputDeviceID: String?
 }
 
 struct CodableColor: Codable {

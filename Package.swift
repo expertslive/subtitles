@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .executable(name: "EventSubtitles", targets: ["EventSubtitlesApp"]),
         .executable(name: "EventSubtitlesSmokeTests", targets: ["EventSubtitlesSmokeTests"]),
+        .executable(name: "EventSubtitlesCoreUnitTests", targets: ["EventSubtitlesCoreUnitTests"]),
         .executable(name: "PrepareWhisperModel", targets: ["PrepareWhisperModel"]),
         .library(name: "EventSubtitlesCore", targets: ["EventSubtitlesCore"])
     ],
@@ -27,6 +28,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "EventSubtitlesSmokeTests",
+            dependencies: ["EventSubtitlesCore"]
+        ),
+        .executableTarget(
+            name: "EventSubtitlesCoreUnitTests",
             dependencies: ["EventSubtitlesCore"]
         ),
         .executableTarget(

@@ -1,3 +1,5 @@
+@preconcurrency import AVFoundation
+import CoreML
 import EventSubtitlesCore
 import Foundation
 @preconcurrency import WhisperKit
@@ -28,6 +30,14 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     }
 
     func start(
+        configuration: SpeechEngineConfiguration,
+        onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
+    ) async throws {
+        try await start(inputDeviceID: nil, configuration: configuration, onResult: onResult)
+    }
+
+    func start(
+        inputDeviceID: DeviceID?,
         configuration: SpeechEngineConfiguration,
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) async throws {
@@ -67,7 +77,10 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             segmentSeeker: kit.segmentSeeker,
             textDecoder: kit.textDecoder,
             tokenizer: tokenizer,
-            audioProcessor: kit.audioProcessor,
+            audioProcessor: SelectedInputAudioProcessor(
+                base: kit.audioProcessor,
+                inputDeviceID: inputDeviceID
+            ),
             decodingOptions: decodeOptions,
             requiredSegmentsForConfirmation: 1,
             silenceThreshold: 0.25,
@@ -189,5 +202,109 @@ enum WhisperKitTranscriberError: LocalizedError {
         case .tokenizerUnavailable:
             "WhisperKit tokenizer was not loaded."
         }
+    }
+}
+
+private final class SelectedInputAudioProcessor: AudioProcessing {
+    private var base: any AudioProcessing
+    private let inputDeviceID: DeviceID?
+
+    init(base: any AudioProcessing, inputDeviceID: DeviceID?) {
+        self.base = base
+        self.inputDeviceID = inputDeviceID
+    }
+
+    static func loadAudio(
+        fromPath audioFilePath: String,
+        channelMode: ChannelMode,
+        startTime: Double?,
+        endTime: Double?,
+        maxReadFrameSize: AVAudioFrameCount?
+    ) throws -> AVAudioPCMBuffer {
+        try AudioProcessor.loadAudio(
+            fromPath: audioFilePath,
+            channelMode: channelMode,
+            startTime: startTime,
+            endTime: endTime,
+            maxReadFrameSize: maxReadFrameSize
+        )
+    }
+
+    static func loadAudio(
+        at audioPaths: [String],
+        channelMode: ChannelMode
+    ) async -> [Result<[Float], Error>] {
+        await AudioProcessor.loadAudio(at: audioPaths, channelMode: channelMode)
+    }
+
+    static func padOrTrimAudio(
+        fromArray audioArray: [Float],
+        startAt startIndex: Int,
+        toLength frameLength: Int,
+        saveSegment: Bool
+    ) -> MLMultiArray? {
+        AudioProcessor.padOrTrimAudio(
+            fromArray: audioArray,
+            startAt: startIndex,
+            toLength: frameLength,
+            saveSegment: saveSegment
+        )
+    }
+
+    var audioSamples: ContiguousArray<Float> {
+        base.audioSamples
+    }
+
+    var relativeEnergy: [Float] {
+        base.relativeEnergy
+    }
+
+    var relativeEnergyWindow: Int {
+        get { base.relativeEnergyWindow }
+        set { base.relativeEnergyWindow = newValue }
+    }
+
+    func purgeAudioSamples(keepingLast keep: Int) {
+        base.purgeAudioSamples(keepingLast: keep)
+    }
+
+    func startRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
+        try base.startRecordingLive(
+            inputDeviceID: inputDeviceID ?? self.inputDeviceID,
+            callback: callback
+        )
+    }
+
+    func startStreamingRecordingLive(
+        inputDeviceID: DeviceID?
+    ) -> (AsyncThrowingStream<[Float], Error>, AsyncThrowingStream<[Float], Error>.Continuation) {
+        base.startStreamingRecordingLive(inputDeviceID: inputDeviceID ?? self.inputDeviceID)
+    }
+
+    func pauseRecording() {
+        base.pauseRecording()
+    }
+
+    func stopRecording() {
+        base.stopRecording()
+    }
+
+    func resumeRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
+        try base.resumeRecordingLive(
+            inputDeviceID: inputDeviceID ?? self.inputDeviceID,
+            callback: callback
+        )
+    }
+
+    func padOrTrim(
+        fromArray audioArray: [Float],
+        startAt startIndex: Int,
+        toLength frameLength: Int
+    ) -> (any AudioProcessorOutputType)? {
+        base.padOrTrim(
+            fromArray: audioArray,
+            startAt: startIndex,
+            toLength: frameLength
+        )
     }
 }

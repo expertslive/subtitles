@@ -27,8 +27,10 @@ struct NowPanel: View {
                 .font(.body)
                 .italic()
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .frame(maxHeight: 118)
     }
 
     private var publicCard: some View {
@@ -40,8 +42,10 @@ struct NowPanel: View {
         ) {
             Text(state.publicCaptionText.isEmpty ? "No public caption yet." : state.publicCaptionText)
                 .font(.title3.weight(.medium))
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .frame(maxHeight: 132)
     }
 
     private var recentCard: some View {
