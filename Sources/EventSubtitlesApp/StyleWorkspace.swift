@@ -305,6 +305,21 @@ struct StyleWorkspace: View {
                 in: 0...6,
                 step: 1
             )
+
+            SliderRow(
+                title: "Auto-clear after",
+                value: Binding(
+                    get: { state.captionAutoClearAfter },
+                    set: {
+                        state.captionAutoClearAfter = $0
+                        state.saveSettings()
+                    }
+                ),
+                range: 0...30,
+                step: 1,
+                unit: state.captionAutoClearAfter == 0 ? "Off" : "s",
+                fractionLength: 0
+            )
         }
     }
 

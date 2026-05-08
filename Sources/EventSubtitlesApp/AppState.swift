@@ -46,7 +46,13 @@ final class AppState: ObservableObject {
     @Published var translationCommandArguments = "--from {source} --to {target}"
 
     @Published var currentEvent: TranscriptEvent?
-    @Published var publicCaptionText = ""
+    @Published var publicCaptionText = "" {
+        didSet {
+            if !publicCaptionText.isEmpty && publicCaptionText != oldValue {
+                lastCaptionActivityAt = Date()
+            }
+        }
+    }
     @Published var captionLayout = CaptionLayout(lines: [])
     @Published var history: [TranscriptEvent] = []
 
@@ -77,6 +83,10 @@ final class AppState: ObservableObject {
     @Published var captionMaximumLatency = 3.0
     @Published var captionLineMinHold = 2.0
     @Published var captionIdleFlushAfter = 1.5
+    /// Seconds of caption inactivity after which the green output auto-clears.
+    /// 0 disables the auto-clear (captions stay on screen until cleared manually
+    /// or until the next session begins).
+    @Published var captionAutoClearAfter = 5.0
     @Published var draftEvent: TranscriptEvent?
     @Published var stableCaptionQueueText = ""
     @Published var captionDisplayLatencyText = "0.0s"
@@ -116,6 +126,7 @@ final class AppState: ObservableObject {
     private var outputController: OutputWindowController?
     private var sessionStartedAt: Date?
     private var lastCaptionSnapshotAt: Date?
+    private var lastCaptionActivityAt: Date?
     private var sessionTimer: Timer?
     private var captionDisplayTimer: Timer?
     private var lastDetectedLanguageForDisplay: SourceLanguage?
@@ -422,6 +433,7 @@ final class AppState: ObservableObject {
                 captionMaximumLatency: captionMaximumLatency,
                 captionLineMinHold: captionLineMinHold,
                 captionIdleFlushAfter: captionIdleFlushAfter,
+                captionAutoClearAfter: captionAutoClearAfter,
                 selectedAudioInputDeviceID: selectedAudioInputDeviceID
             )
         )
@@ -497,6 +509,7 @@ final class AppState: ObservableObject {
         captionMaximumLatency = settings.captionMaximumLatency ?? 3.0
         captionLineMinHold = settings.captionLineMinHold ?? 2.0
         captionIdleFlushAfter = settings.captionIdleFlushAfter ?? 1.5
+        captionAutoClearAfter = settings.captionAutoClearAfter ?? 5.0
         selectedAudioInputDeviceID = settings.selectedAudioInputDeviceID
     }
 
@@ -1154,10 +1167,37 @@ final class AppState: ObservableObject {
                 now: Date(),
                 configuration: captionDisplayConfiguration
             )
-            return
+        } else {
+            await flushIdleCaptionTailIfNeeded()
+            publishNextCaptionCue()
         }
-        await flushIdleCaptionTailIfNeeded()
-        publishNextCaptionCue()
+        checkAutoClearIfNeeded(now: Date())
+    }
+
+    /// If captions have sat unchanged for `captionAutoClearAfter` seconds, clear
+    /// the visible state and reset the underlying pipelines so the next utterance
+    /// starts fresh.
+    private func checkAutoClearIfNeeded(now: Date) {
+        guard captionAutoClearAfter > 0 else { return }
+        guard !publicCaptionText.isEmpty else { return }
+        guard let lastActivity = lastCaptionActivityAt else { return }
+        guard now.timeIntervalSince(lastActivity) >= captionAutoClearAfter else { return }
+
+        captionStabilityEngine.reset()
+        captionDisplayScheduler.reset()
+        linePacedRoller.reset()
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: targetCharactersPerLine,
+            maxLines: maxLines
+        )
+        currentEvent = nil
+        draftEvent = nil
+        publicCaptionText = ""
+        captionLayout = CaptionLayout(lines: [])
+        stableCaptionQueueText = ""
+        captionDisplayLatencyText = "0.0s"
+        lastCaptionSnapshotAt = nil
+        lastCaptionActivityAt = nil
     }
 
     private func flushIdleCaptionTailIfNeeded() async {
