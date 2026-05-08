@@ -157,6 +157,7 @@ public struct CaptionCue: Identifiable, Equatable, Sendable {
 public struct CaptionStabilityEngine: Sendable {
     private var previousTokens: [CaptionToken] = []
     private var committedTokenCount = 0
+    private static let confidenceThreshold: Float = 0.7
 
     public init() {}
 
@@ -191,21 +192,18 @@ public struct CaptionStabilityEngine: Sendable {
             ]
         }
 
-        guard !previousTokens.isEmpty else {
-            previousTokens = tokens
-            return []
-        }
-
-        let commonPrefix = commonPrefixCount(previousTokens, tokens)
-        if commonPrefix < committedTokenCount {
-            committedTokenCount = 0
-        }
-        let publishableCount = min(
-            commonPrefix,
-            max(0, tokens.count - configuration.unstableWordCount)
+        let publishableCount = computePublishableCount(
+            tokens: tokens,
+            words: snapshot.words,
+            configuration: configuration
         )
 
         previousTokens = tokens
+
+        // If the stable prefix shrank (e.g. new utterance after flush), reset the committed pointer.
+        if publishableCount < committedTokenCount {
+            committedTokenCount = publishableCount
+        }
 
         guard publishableCount > committedTokenCount else {
             return []
@@ -252,6 +250,46 @@ public struct CaptionStabilityEngine: Sendable {
                 isFinal: isFinal
             )
         ]
+    }
+
+    private func computePublishableCount(
+        tokens: [CaptionToken],
+        words: [RecognizedWord],
+        configuration: CaptionDisplayConfiguration
+    ) -> Int {
+        let trailingHold = max(0, tokens.count - configuration.unstableWordCount)
+
+        // No word-level confidences available → keep the prior prefix-agreement rule.
+        if words.isEmpty || words.count != tokens.count {
+            guard !previousTokens.isEmpty else {
+                return committedTokenCount
+            }
+            let commonPrefix = commonPrefixCount(previousTokens, tokens)
+            if commonPrefix < committedTokenCount {
+                // prefix changed under us; reset committed pointer
+                return commonPrefix
+            }
+            return min(commonPrefix, trailingHold)
+        }
+
+        // Word confidences available: commit a word as soon as
+        //   - it is within the trailing-hold horizon, AND
+        //   - it has probability ≥ threshold OR it agreed with the same position in previousTokens.
+        let priorPrefix = commonPrefixCount(previousTokens, tokens)
+
+        var publishable = committedTokenCount
+        let horizon = trailingHold
+        while publishable < horizon {
+            let word = words[publishable]
+            let confident = word.probability >= Self.confidenceThreshold
+            let agreedWithPrior = publishable < priorPrefix
+            if confident || agreedWithPrior {
+                publishable += 1
+            } else {
+                break
+            }
+        }
+        return publishable
     }
 
     private func commonPrefixCount(_ left: [CaptionToken], _ right: [CaptionToken]) -> Int {

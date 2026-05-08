@@ -199,6 +199,103 @@ private func testStabilityEngineResetClearsCommittedPrefix() {
     expect(next.isEmpty, "after reset, the previously committed prefix must not re-publish on the next partial")
 }
 
+private func testStabilityCommitsHighConfidenceWordsImmediately() {
+    var engine = CaptionStabilityEngine()
+    let configuration = CaptionDisplayConfiguration(
+        mode: .calmBlocks,
+        stability: .calm,
+        commitDelay: 1.0,
+        unstableWordCount: 2,
+        minimumHold: 1.2,
+        maximumLatency: 3.0
+    )
+
+    let words: [RecognizedWord] = [
+        RecognizedWord(text: "Welcome", probability: 0.95),
+        RecognizedWord(text: "to", probability: 0.92),
+        RecognizedWord(text: "the", probability: 0.90),
+        RecognizedWord(text: "stage", probability: 0.85),
+        RecognizedWord(text: "everyone", probability: 0.40),
+        RecognizedWord(text: "today", probability: 0.30)
+    ]
+    let snapshot = TranscriptSnapshot(
+        text: "Welcome to the stage everyone today",
+        createdAt: Date(timeIntervalSince1970: 1),
+        isFinal: false,
+        words: words
+    )
+
+    let phrases = engine.ingest(snapshot, configuration: configuration)
+    expect(
+        phrases.map(\.text) == ["Welcome to the stage"],
+        "first 4 high-confidence words should commit on first snapshot; trailing low-confidence words held"
+    )
+}
+
+private func testStabilityHoldsLowConfidenceWordsUntilAgreement() {
+    var engine = CaptionStabilityEngine()
+    let configuration = CaptionDisplayConfiguration(
+        mode: .calmBlocks,
+        stability: .calm,
+        commitDelay: 1.0,
+        unstableWordCount: 2,
+        minimumHold: 1.2,
+        maximumLatency: 3.0
+    )
+
+    let firstWords: [RecognizedWord] = [
+        RecognizedWord(text: "Maybe", probability: 0.45),
+        RecognizedWord(text: "Cubernetes", probability: 0.40)
+    ]
+    let firstPhrases = engine.ingest(
+        TranscriptSnapshot(text: "Maybe Cubernetes", createdAt: Date(timeIntervalSince1970: 1), isFinal: false, words: firstWords),
+        configuration: configuration
+    )
+    expect(firstPhrases.isEmpty, "low-confidence partial should not commit")
+
+    let secondWords: [RecognizedWord] = [
+        RecognizedWord(text: "Maybe", probability: 0.50),
+        RecognizedWord(text: "Kubernetes", probability: 0.55),
+        RecognizedWord(text: "deploys", probability: 0.45)
+    ]
+    let secondPhrases = engine.ingest(
+        TranscriptSnapshot(text: "Maybe Kubernetes deploys", createdAt: Date(timeIntervalSince1970: 2), isFinal: false, words: secondWords),
+        configuration: configuration
+    )
+    expect(
+        secondPhrases.map(\.text) == ["Maybe"],
+        "only words that agree across snapshots commit when confidence is low"
+    )
+}
+
+private func testStabilityFallsBackToPrefixOnlyWhenWordsMissing() {
+    var engine = CaptionStabilityEngine()
+    let configuration = CaptionDisplayConfiguration(
+        mode: .calmBlocks,
+        stability: .calm,
+        commitDelay: 1.0,
+        unstableWordCount: 2,
+        minimumHold: 1.2,
+        maximumLatency: 3.0
+    )
+
+    expect(
+        engine.ingest(
+            TranscriptSnapshot(text: "manual caption text", createdAt: Date(timeIntervalSince1970: 1), isFinal: false),
+            configuration: configuration
+        ).isEmpty,
+        "first snapshot without words holds for prefix agreement"
+    )
+    let phrases = engine.ingest(
+        TranscriptSnapshot(text: "manual caption text continued", createdAt: Date(timeIntervalSince1970: 2), isFinal: false),
+        configuration: configuration
+    )
+    expect(
+        phrases.map(\.text) == ["manual caption"],
+        "without words, behavior matches the prior prefix-only stability rule"
+    )
+}
+
 testComposerKeepsOnlyConfiguredNumberOfLines()
 testComposerNormalizesWhitespace()
 testGlossaryCorrectorAppliesCaseInsensitiveCorrections()
@@ -209,5 +306,8 @@ testCaptionStabilityFlushesIdleTail()
 testCaptionStabilityContinuesAfterIdleFlush()
 testCaptionSchedulerRespectsMinimumHold()
 testStabilityEngineResetClearsCommittedPrefix()
+testStabilityCommitsHighConfidenceWordsImmediately()
+testStabilityHoldsLowConfidenceWordsUntilAgreement()
+testStabilityFallsBackToPrefixOnlyWhenWordsMissing()
 
 print("Smoke tests passed")
