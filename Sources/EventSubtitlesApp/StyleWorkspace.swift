@@ -251,29 +251,47 @@ struct StyleWorkspace: View {
             }
             .pickerStyle(.segmented)
 
-            SliderRow(title: "Commit delay", value: Binding(
-                get: { state.captionCommitDelay },
-                set: {
-                    state.captionCommitDelay = $0
-                    state.saveSettings()
-                }
-            ), range: 0.3...2.0, step: 0.1, unit: "s", fractionLength: 1)
+            if state.captionDisplayMode == .liveRollUp {
+                SliderRow(title: "Line hold", value: Binding(
+                    get: { state.captionLineMinHold },
+                    set: {
+                        state.captionLineMinHold = $0
+                        state.saveSettings()
+                    }
+                ), range: 1.0...4.0, step: 0.1, unit: "s", fractionLength: 1)
 
-            SliderRow(title: "Minimum hold", value: Binding(
-                get: { state.captionMinimumHold },
-                set: {
-                    state.captionMinimumHold = $0
-                    state.saveSettings()
-                }
-            ), range: 0.8...3.0, step: 0.1, unit: "s", fractionLength: 1)
+                SliderRow(title: "Idle flush", value: Binding(
+                    get: { state.captionIdleFlushAfter },
+                    set: {
+                        state.captionIdleFlushAfter = $0
+                        state.saveSettings()
+                    }
+                ), range: 0.5...3.0, step: 0.1, unit: "s", fractionLength: 1)
+            } else {
+                SliderRow(title: "Commit delay", value: Binding(
+                    get: { state.captionCommitDelay },
+                    set: {
+                        state.captionCommitDelay = $0
+                        state.saveSettings()
+                    }
+                ), range: 0.3...2.0, step: 0.1, unit: "s", fractionLength: 1)
 
-            SliderRow(title: "Max latency", value: Binding(
-                get: { state.captionMaximumLatency },
-                set: {
-                    state.captionMaximumLatency = $0
-                    state.saveSettings()
-                }
-            ), range: 1.5...5.0, step: 0.1, unit: "s", fractionLength: 1)
+                SliderRow(title: "Minimum hold", value: Binding(
+                    get: { state.captionMinimumHold },
+                    set: {
+                        state.captionMinimumHold = $0
+                        state.saveSettings()
+                    }
+                ), range: 0.8...3.0, step: 0.1, unit: "s", fractionLength: 1)
+
+                SliderRow(title: "Max latency", value: Binding(
+                    get: { state.captionMaximumLatency },
+                    set: {
+                        state.captionMaximumLatency = $0
+                        state.saveSettings()
+                    }
+                ), range: 1.5...5.0, step: 0.1, unit: "s", fractionLength: 1)
+            }
 
             Stepper(
                 "Hidden unstable words: \(state.captionUnstableWordCount)",
