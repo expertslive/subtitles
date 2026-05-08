@@ -4,13 +4,29 @@ struct SubtitleOutputView: View {
     @EnvironmentObject private var state: AppState
     var ignoresSafeArea = true
     var animatesCaptionChanges = true
+    /// Set to true on the actual output window only. The operator-UI previews
+    /// (Live, Style, Output workspaces) leave this false — their narrower frames
+    /// must not drive the audience-facing line wrap.
+    var governsLayout = false
 
     var body: some View {
-        ZStack {
-            background
+        GeometryReader { geo in
+            ZStack {
+                background
 
-            if !state.outputBlanked {
-                positionedCaptions
+                if !state.outputBlanked {
+                    positionedCaptions
+                }
+            }
+            .onAppear {
+                if governsLayout {
+                    state.applyOutputRenderWidth(geo.size.width)
+                }
+            }
+            .onChange(of: geo.size.width) { _, newWidth in
+                if governsLayout {
+                    state.applyOutputRenderWidth(newWidth)
+                }
             }
         }
     }

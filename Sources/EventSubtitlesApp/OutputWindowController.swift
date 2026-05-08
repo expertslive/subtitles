@@ -130,7 +130,7 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
 
     private func createWindow() {
         let hostingController = NSHostingController(
-            rootView: SubtitleOutputView()
+            rootView: SubtitleOutputView(governsLayout: true)
                 .environmentObject(state)
         )
 

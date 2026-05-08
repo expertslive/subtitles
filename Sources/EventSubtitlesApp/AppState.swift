@@ -127,6 +127,10 @@ final class AppState: ObservableObject {
     private var sessionStartedAt: Date?
     private var lastCaptionSnapshotAt: Date?
     private var lastCaptionActivityAt: Date?
+    /// Pixel width of the live output window's render area. Set by SubtitleOutputView
+    /// when it has `governsLayout: true`. Drives the `effectiveTargetCharactersPerLine`
+    /// calculation so each logical line fits on one visual row at the chosen font.
+    private var outputRenderWidth: CGFloat = 0
     private var sessionTimer: Timer?
     private var captionDisplayTimer: Timer?
     private var lastDetectedLanguageForDisplay: SourceLanguage?
@@ -358,6 +362,47 @@ final class AppState: ObservableObject {
             lineMinHold: captionLineMinHold,
             idleFlushAfter: captionIdleFlushAfter
         )
+    }
+
+    /// Called by `SubtitleOutputView` (with `governsLayout: true`) on appear and
+    /// on width changes. Records the actual render width so wrap can be tuned
+    /// to fit one logical line on one visual row at the chosen font size.
+    func applyOutputRenderWidth(_ width: CGFloat) {
+        let clamped = max(0, width)
+        if abs(clamped - outputRenderWidth) > 1 {
+            outputRenderWidth = clamped
+        }
+    }
+
+    /// Pixel-aware wrap target. Computes how many characters of the current
+    /// font fit in the available width, then caps with the operator's
+    /// "Line width" slider. Falls back to the slider value if no width has
+    /// been observed yet (e.g., output window not opened).
+    var effectiveTargetCharactersPerLine: Int {
+        let sliderValue = max(8, targetCharactersPerLine)
+        guard outputRenderWidth > 0 else { return sliderValue }
+
+        let availableWidth = max(0, outputRenderWidth - 2 * safeMargin)
+        guard availableWidth > 0 else { return sliderValue }
+
+        // Build a representative bold font in the operator's chosen face.
+        let baseFont = NSFont(name: fontName, size: CGFloat(fontSize))
+            ?? NSFont.systemFont(ofSize: CGFloat(fontSize))
+        let boldDescriptor = baseFont.fontDescriptor.withSymbolicTraits(.bold)
+        let font = NSFont(descriptor: boldDescriptor, size: CGFloat(fontSize)) ?? baseFont
+
+        // Measure the average pixel width of a representative wide-character run.
+        // Bold sans-serif fonts at 68pt average ~37–40px per char; using a 10-char
+        // sample averages out kerning variance.
+        let sample = "Mwoenarsl" as NSString
+        let sampleWidth = sample.size(withAttributes: [.font: font]).width
+        let perChar = sampleWidth / CGFloat(sample.length)
+        guard perChar > 0 else { return sliderValue }
+
+        let fits = Int((availableWidth / perChar).rounded(.down)) - 1 // 1-char safety
+        let measured = max(8, fits)
+
+        return min(sliderValue, measured)
     }
 
     func refreshResourceUsage() {
@@ -1028,7 +1073,7 @@ final class AppState: ObservableObject {
         let isRolling = captionDisplayMode == .liveRollUp
         let configuration = captionDisplayConfiguration
         linePacedRoller.updateLayout(
-            targetCharactersPerLine: targetCharactersPerLine,
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
             maxLines: maxLines
         )
 
@@ -1138,7 +1183,7 @@ final class AppState: ObservableObject {
         configuration: CaptionDisplayConfiguration
     ) {
         linePacedRoller.updateLayout(
-            targetCharactersPerLine: targetCharactersPerLine,
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
             maxLines: maxLines
         )
         let changed = linePacedRoller.tick(
@@ -1201,7 +1246,7 @@ final class AppState: ObservableObject {
         captionDisplayScheduler.reset()
         linePacedRoller.reset()
         linePacedRoller.updateLayout(
-            targetCharactersPerLine: targetCharactersPerLine,
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
             maxLines: maxLines
         )
         currentEvent = nil
@@ -1272,7 +1317,7 @@ final class AppState: ObservableObject {
         captionDisplayScheduler.reset()
         linePacedRoller.reset()
         linePacedRoller.updateLayout(
-            targetCharactersPerLine: targetCharactersPerLine,
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
             maxLines: maxLines
         )
         stableCaptionQueueText = ""
