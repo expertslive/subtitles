@@ -34,11 +34,11 @@ struct AudioLevelSample: Sendable {
 /// `[Float]` AsyncStream consumed by the Whisper input adapter.
 final class AudioCapturePipeline: @unchecked Sendable {
     private let engine = AVAudioEngine()
-    private let mixer = AVAudioMixerNode()
     private let writeQueue = DispatchQueue(label: "audio.capture.write", qos: .utility)
     private let stateLock = NSLock()
     private var recordingFile: AVAudioFile?
     private var running = false
+    private var converter: AVAudioConverter?
 
     private let whisperFormat: AVAudioFormat = {
         AVAudioFormat(
@@ -65,8 +65,6 @@ final class AudioCapturePipeline: @unchecked Sendable {
             self.sampleContinuation = continuation
         }
         self.sampleStream = stream
-
-        engine.attach(mixer)
     }
 
     deinit {
@@ -107,9 +105,12 @@ final class AudioCapturePipeline: @unchecked Sendable {
             throw AudioCapturePipelineError.inputUnavailable
         }
 
-        // Disconnect any prior wiring; rebuild from input -> mixer.
-        engine.disconnectNodeOutput(inputNode)
-        engine.connect(inputNode, to: mixer, format: inputFormat)
+        guard let converter = AVAudioConverter(from: inputFormat, to: whisperFormat) else {
+            throw AudioCapturePipelineError.recordingUnavailable(
+                "Cannot convert from \(inputFormat) to 16 kHz mono Float32."
+            )
+        }
+        self.converter = converter
 
         if let recordingURL {
             do {
@@ -127,8 +128,8 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
 
         let bufferSize: AVAudioFrameCount = 1024
-        mixer.removeTap(onBus: 0)
-        mixer.installTap(onBus: 0, bufferSize: bufferSize, format: whisperFormat) { [weak self] buffer, _ in
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
             self?.handleBuffer(buffer)
         }
 
@@ -150,8 +151,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         running = false
         stateLock.unlock()
 
-        mixer.removeTap(onBus: 0)
+        engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        converter = nil
 
         let drained = recordingFile
         recordingFile = nil
@@ -190,11 +192,39 @@ final class AudioCapturePipeline: @unchecked Sendable {
     // MARK: - Private
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let channel = buffer.floatChannelData?[0] else {
+        guard let converter else { return }
+
+        let inSampleRate = buffer.format.sampleRate
+        let outSampleRate = whisperFormat.sampleRate
+        let outFrameCapacity = AVAudioFrameCount(
+            ceil(Double(buffer.frameLength) * outSampleRate / inSampleRate)
+        )
+        guard outFrameCapacity > 0,
+              let outBuffer = AVAudioPCMBuffer(pcmFormat: whisperFormat, frameCapacity: outFrameCapacity)
+        else {
             levelHandler?(AudioLevelSample(rms: 0, peak: 0))
             return
         }
-        let frameCount = Int(buffer.frameLength)
+
+        var error: NSError?
+        var inputProvided = false
+        let status = converter.convert(to: outBuffer, error: &error) { _, outStatus in
+            if inputProvided {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            inputProvided = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        guard status != .error,
+              let channel = outBuffer.floatChannelData?[0] else {
+            levelHandler?(AudioLevelSample(rms: 0, peak: 0))
+            return
+        }
+
+        let frameCount = Int(outBuffer.frameLength)
         guard frameCount > 0 else {
             levelHandler?(AudioLevelSample(rms: 0, peak: 0))
             return
@@ -216,8 +246,8 @@ final class AudioCapturePipeline: @unchecked Sendable {
         let samples = Array(UnsafeBufferPointer(start: channel, count: frameCount))
         sampleContinuation?.yield(samples)
 
-        // Hand the whole AVAudioPCMBuffer to the write queue (off the audio thread).
-        let bufferCopy = buffer
+        // Hand the converted PCM buffer to the write queue (off the audio thread).
+        let bufferCopy = outBuffer
         writeQueue.async { [weak self] in
             try? self?.recordingFile?.write(from: bufferCopy)
         }
