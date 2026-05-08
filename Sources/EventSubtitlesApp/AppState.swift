@@ -7,6 +7,16 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppState: ObservableObject {
+    static let chromaKeyGreen = Color(.sRGB, red: 0.0, green: 177.0 / 255.0, blue: 64.0 / 255.0, opacity: 1.0)
+
+    static func colorMatches(_ a: Color, _ b: Color, tolerance: CGFloat = 0.01) -> Bool {
+        let lhs = NSColor(a).usingColorSpace(.sRGB) ?? NSColor(a)
+        let rhs = NSColor(b).usingColorSpace(.sRGB) ?? NSColor(b)
+        return abs(lhs.redComponent - rhs.redComponent) < tolerance
+            && abs(lhs.greenComponent - rhs.greenComponent) < tolerance
+            && abs(lhs.blueComponent - rhs.blueComponent) < tolerance
+    }
+
     @Published var mode: ProcessingMode = .subtitlesOnly {
         didSet {
             if mode != .subtitlesOnly {
@@ -53,7 +63,7 @@ final class AppState: ObservableObject {
     @Published var safeMargin = 78.0
     @Published var lineSpacing = 8.0
     @Published var foregroundColor = Color.white
-    @Published var backgroundColor = Color(red: 0.0, green: 0.82, blue: 0.0)
+    @Published var backgroundColor = AppState.chromaKeyGreen
     @Published var shadowEnabled = true
     @Published var shadowRadius = 7.0
     @Published var captionPosition: CaptionVerticalPosition = .bottom
@@ -219,7 +229,7 @@ final class AppState: ObservableObject {
     }
 
     func useChromaGreen() {
-        backgroundColor = Color(red: 0.0, green: 0.82, blue: 0.0)
+        backgroundColor = AppState.chromaKeyGreen
     }
 
     func useBlackBackground() {

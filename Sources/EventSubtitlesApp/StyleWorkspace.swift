@@ -357,7 +357,7 @@ struct StyleWorkspace: View {
     }
 
     private var isChromaPreset: Bool {
-        state.backgroundColor.description.contains("0.82")
+        AppState.colorMatches(state.backgroundColor, AppState.chromaKeyGreen)
     }
 
     private var isBlackPreset: Bool {
