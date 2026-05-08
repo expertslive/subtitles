@@ -47,17 +47,18 @@ struct SubtitleOutputView: View {
     }
 
     private var captionLines: some View {
-        // Render all visible lines as a SINGLE Text with embedded newlines so SwiftUI's
-        // `.minimumScaleFactor` applies uniformly to the whole block. With per-line Text
-        // views, each line scaled independently — a short line at full size, a long line
-        // shrunk — visually inconsistent on the projector.
+        // Always render at the operator's selected fontSize. No auto-scaling.
+        // Lines are pre-wrapped to fit `targetCharactersPerLine`; if the operator
+        // selects a font size whose pixel width overflows the screen, that's their
+        // tuning to do. Truncation (tail) handles any residual overflow gracefully
+        // without changing the perceived font size.
         Text(state.captionLayout.text)
             .font(.custom(state.fontName, size: state.fontSize).weight(.bold))
             .foregroundStyle(state.foregroundColor)
             .multilineTextAlignment(.center)
             .lineSpacing(state.lineSpacing)
             .lineLimit(state.maxLines)
-            .minimumScaleFactor(0.58)
+            .truncationMode(.tail)
             .allowsTightening(false)
             .shadow(
                 color: state.shadowEnabled ? .black.opacity(0.82) : .clear,
