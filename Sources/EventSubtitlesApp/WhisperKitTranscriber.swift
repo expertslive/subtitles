@@ -8,6 +8,7 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     private var streamTranscriber: AudioStreamTranscriber?
     private var streamProcessor: StreamFedAudioProcessor?
     private var sampleFeederTask: Task<Void, Never>?
+    private var streamRunnerTask: Task<Void, Never>?
     private var lastConfirmedSegmentCount = 0
     private var lastPartialText = ""
     private var modelName: String
@@ -62,24 +63,27 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             throw WhisperKitTranscriberError.tokenizerUnavailable
         }
 
-        let promptText = SpeechPromptBuilder.promptText(
+        // promptTokens are intentionally disabled: Whisper echoes the prompt text back
+        // into the first transcribed segment when the prompt does not look like natural
+        // speech (e.g. "Event: <name>. Vocabulary: term1, term2."). The GlossaryCorrector
+        // already fixes spelling for the same terms post-recognition, so we keep that
+        // outcome without the echo risk. Re-enable once we have reliable anti-echo
+        // post-processing.
+        _ = SpeechPromptBuilder.promptText(
             sessionName: configuration.sessionName,
             glossary: configuration.glossary
         )
-        let promptTokens: [Int]? = promptText.isEmpty
-            ? nil
-            : Array(tokenizer.encode(text: " " + promptText).suffix(224))
 
         let decodeOptions = DecodingOptions(
             verbose: false,
             task: .transcribe,
             language: whisperLanguageCode(for: configuration.sourceLanguage),
-            usePrefillPrompt: true,
+            usePrefillPrompt: configuration.sourceLanguage != .automatic,
             detectLanguage: configuration.sourceLanguage == .automatic,
             skipSpecialTokens: true,
             withoutTimestamps: false,
             wordTimestamps: true,
-            promptTokens: promptTokens,
+            promptTokens: nil,
             chunkingStrategy: .vad
         )
 
@@ -103,13 +107,27 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         }
 
         streamTranscriber = transcriber
-        try await transcriber.startStreamTranscription()
 
-        // Pump samples from AudioCapturePipeline into the processor, on a background task.
+        // Start the sample feeder FIRST so the processor's audioSamples grows the moment
+        // the realtime loop starts polling.
         sampleFeederTask = Task.detached(priority: .userInitiated) { [weak processor] in
             for await chunk in sampleStream {
                 guard !Task.isCancelled else { break }
                 processor?.ingest(chunk)
+            }
+        }
+
+        // `startStreamTranscription()` enters a realtime loop that does not return until
+        // `stopStreamTranscription()` flips `state.isRecording = false`. Run it as a
+        // detached background task instead of awaiting it here, otherwise this method
+        // (and every caller) would hang forever and `stop` would never run.
+        streamRunnerTask = Task.detached(priority: .userInitiated) { [weak transcriber] in
+            guard let transcriber else { return }
+            do {
+                try await transcriber.startStreamTranscription()
+            } catch {
+                // WhisperKit logs internally; a clean error path from the detached task
+                // is not part of the SpeechTranscribing contract.
             }
         }
     }
@@ -124,6 +142,8 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         streamProcessor = nil
 
         await streamTranscriber?.stopStreamTranscription()
+        streamRunnerTask?.cancel()
+        streamRunnerTask = nil
         streamTranscriber = nil
         if unloadModel {
             whisperKit = nil
@@ -223,7 +243,14 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             return segmentText
         }
 
-        return state.currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentText = state.currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // WhisperKit sets `state.currentText = "Waiting for speech..."` as an internal
+        // idle placeholder when the realtime loop has no audio to transcribe. That string
+        // is not a transcript — filter it before it reaches the operator/audience UI.
+        if currentText == "Waiting for speech..." {
+            return ""
+        }
+        return currentText
     }
 
     private func whisperLanguageCode(for language: SourceLanguage) -> String? {

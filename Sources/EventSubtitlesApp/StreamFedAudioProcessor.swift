@@ -9,8 +9,8 @@ import Foundation
 final class StreamFedAudioProcessor: AudioProcessing, @unchecked Sendable {
     private let lock = NSLock()
     private var samples = ContiguousArray<Float>()
-    private var energy: [Float] = []
-    private var energyWindowSize = 100
+    private var audioEnergy: [(rel: Float, avg: Float, max: Float, min: Float)] = []
+    private var energyWindowSize = 20
 
     var audioSamples: ContiguousArray<Float> {
         lock.lock()
@@ -21,7 +21,7 @@ final class StreamFedAudioProcessor: AudioProcessing, @unchecked Sendable {
     var relativeEnergy: [Float] {
         lock.lock()
         defer { lock.unlock() }
-        return energy
+        return audioEnergy.map { $0.rel }
     }
 
     var relativeEnergyWindow: Int {
@@ -36,13 +36,22 @@ final class StreamFedAudioProcessor: AudioProcessing, @unchecked Sendable {
     }
 
     /// Push samples produced by AudioCapturePipeline into Whisper's view.
+    /// Computes per-buffer relative energy using WhisperKit's own formula so that
+    /// `AudioStreamTranscriber`'s VAD can detect speech.
     func ingest(_ chunk: [Float]) {
         lock.lock()
         samples.append(contentsOf: chunk)
-        let rms = chunk.isEmpty ? 0 : sqrt(chunk.reduce(0) { $0 + $1 * $1 } / Float(chunk.count))
-        energy.append(rms)
-        if energy.count > energyWindowSize * 4 {
-            energy.removeFirst(energy.count - energyWindowSize * 4)
+
+        // Match WhisperKit's AudioProcessor.processBuffer: silence baseline = min avg energy
+        // over the last `relativeEnergyWindow` buffers.
+        let minAvgEnergy = audioEnergy.suffix(energyWindowSize).reduce(Float.infinity) { min($0, $1.avg) }
+        let referenceEnergy: Float? = minAvgEnergy.isFinite ? minAvgEnergy : nil
+        let relative = AudioProcessor.calculateRelativeEnergy(of: chunk, relativeTo: referenceEnergy)
+        let signalEnergy = AudioProcessor.calculateEnergy(of: chunk)
+
+        audioEnergy.append((rel: relative, avg: signalEnergy.avg, max: signalEnergy.max, min: signalEnergy.min))
+        if audioEnergy.count > energyWindowSize * 8 {
+            audioEnergy.removeFirst(audioEnergy.count - energyWindowSize * 8)
         }
         lock.unlock()
     }

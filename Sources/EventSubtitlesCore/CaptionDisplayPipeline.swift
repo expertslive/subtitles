@@ -44,25 +44,25 @@ public enum CaptionStabilityLevel: String, CaseIterable, Codable, Identifiable, 
 
     public var defaultUnstableWordCount: Int {
         switch self {
-        case .fast: 2
-        case .balanced: 3
-        case .calm: 4
+        case .fast: 1
+        case .balanced: 2
+        case .calm: 3
         }
     }
 
     public var defaultCommitDelay: TimeInterval {
         switch self {
-        case .fast: 0.55
-        case .balanced: 0.85
-        case .calm: 1.1
+        case .fast: 0.25
+        case .balanced: 0.4
+        case .calm: 0.6
         }
     }
 
     public var defaultMinimumHold: TimeInterval {
         switch self {
-        case .fast: 1.0
-        case .balanced: 1.25
-        case .calm: 1.45
+        case .fast: 0.7
+        case .balanced: 0.95
+        case .calm: 1.2
         }
     }
 }
