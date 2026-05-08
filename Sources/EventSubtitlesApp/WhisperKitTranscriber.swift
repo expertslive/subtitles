@@ -59,15 +59,24 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             throw WhisperKitTranscriberError.tokenizerUnavailable
         }
 
+        let promptText = SpeechPromptBuilder.promptText(
+            sessionName: configuration.sessionName,
+            glossary: configuration.glossary
+        )
+        let promptTokens: [Int] = promptText.isEmpty
+            ? []
+            : Array(tokenizer.encode(text: " " + promptText).suffix(224))
+
         let decodeOptions = DecodingOptions(
             verbose: false,
             task: .transcribe,
             language: whisperLanguageCode(for: configuration.sourceLanguage),
-            usePrefillPrompt: configuration.sourceLanguage != .automatic,
+            usePrefillPrompt: true,
             detectLanguage: configuration.sourceLanguage == .automatic,
             skipSpecialTokens: true,
             withoutTimestamps: false,
             wordTimestamps: false,
+            promptTokens: promptTokens,
             chunkingStrategy: .vad
         )
 

@@ -843,7 +843,8 @@ final class AppState: ObservableObject {
                     try await self.simulatorTranscriber.start(
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
-                            glossary: self.glossaryText
+                            glossary: self.glossaryText,
+                            sessionName: self.sessionName
                         )
                     ) { [weak self] result in
                         Task { @MainActor [weak self] in
@@ -866,7 +867,8 @@ final class AppState: ObservableObject {
                         inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
-                            glossary: self.glossaryText
+                            glossary: self.glossaryText,
+                            sessionName: self.sessionName
                         )
                     ) { [weak self] result in
                         Task { @MainActor [weak self] in
