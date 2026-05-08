@@ -115,13 +115,24 @@ final class SessionRecorder {
     }
 
     func stop() throws {
-        guard metadata != nil else {
-            return
-        }
+        guard metadata != nil, let directoryURL else { return }
 
         metadata?.endedAt = Date()
         metadata?.segmentCount = segments.count
         try writeMetadata()
+
+        try SRTFormatter.formatSource(segments).write(
+            to: directoryURL.appendingPathComponent("source.srt"),
+            atomically: true,
+            encoding: .utf8)
+        try SRTFormatter.formatDisplay(segments).write(
+            to: directoryURL.appendingPathComponent("display.srt"),
+            atomically: true,
+            encoding: .utf8)
+        try SRTFormatter.formatDisplay(segments).write(
+            to: directoryURL.appendingPathComponent("draft.srt"),
+            atomically: true,
+            encoding: .utf8)
     }
 
     func record(
@@ -141,26 +152,16 @@ final class SessionRecorder {
         )
         segments.append(segment)
         metadata?.segmentCount = segments.count
-        try writeMetadata()
 
         try append(line(for: segment, text: segment.sourceText), to: directoryURL.appendingPathComponent("source-transcript.txt"))
         try append(line(for: segment, text: segment.displayText), to: directoryURL.appendingPathComponent("display-transcript.txt"))
         try appendJSONLine(segment, to: directoryURL.appendingPathComponent("segments.jsonl"))
-        try SRTFormatter.formatDisplay(segments).write(
-            to: directoryURL.appendingPathComponent("draft.srt"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try SRTFormatter.formatSource(segments).write(
-            to: directoryURL.appendingPathComponent("source.srt"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try SRTFormatter.formatDisplay(segments).write(
-            to: directoryURL.appendingPathComponent("display.srt"),
-            atomically: true,
-            encoding: .utf8
-        )
+
+        let sourceCue = SRTFormatter.cue(for: segment, useDisplayText: false)
+        let displayCue = SRTFormatter.cue(for: segment, useDisplayText: true)
+        try append(sourceCue, to: directoryURL.appendingPathComponent("source.srt"))
+        try append(displayCue, to: directoryURL.appendingPathComponent("display.srt"))
+        try append(displayCue, to: directoryURL.appendingPathComponent("draft.srt"))
     }
 
     private func makeSegment(

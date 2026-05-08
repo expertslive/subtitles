@@ -86,13 +86,43 @@ func testPromptBuilderTruncatesAtCharacterLimit() -> Bool {
     return expectEqual(prompt.count, 100, "prompt should be truncated to maxCharacters")
 }
 
+func testSRTAppendingMatchesFullFormat() -> Bool {
+    let segments = [
+        CaptionSegmentRecord(
+            index: 1, createdAt: Date(timeIntervalSince1970: 0),
+            startSeconds: 0, endSeconds: 1.5,
+            sourceText: "First", displayText: "First",
+            mode: .subtitlesOnly, sourceLanguage: .english
+        ),
+        CaptionSegmentRecord(
+            index: 2, createdAt: Date(timeIntervalSince1970: 2),
+            startSeconds: 2.0, endSeconds: 3.5,
+            sourceText: "Second", displayText: "Second",
+            mode: .subtitlesOnly, sourceLanguage: .english
+        )
+    ]
+
+    let appended = segments
+        .map { SRTFormatter.cue(for: $0, useDisplayText: true) }
+        .joined()
+    let regenerated = SRTFormatter.formatDisplay(segments)
+
+    let normalize: (String) -> String = { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    return expectEqual(
+        normalize(appended),
+        normalize(regenerated),
+        "appending per-cue strings should produce the same SRT body as full regeneration"
+    )
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
     ("unavailableOverrideFallsBackToDefaultDevice", testUnavailableOverrideFallsBackToDefaultDevice),
     ("promptBuilderIncludesSessionAndGlossaryTerms", testPromptBuilderIncludesSessionAndGlossaryTerms),
     ("promptBuilderDropsEmptyParts", testPromptBuilderDropsEmptyParts),
-    ("promptBuilderTruncatesAtCharacterLimit", testPromptBuilderTruncatesAtCharacterLimit)
+    ("promptBuilderTruncatesAtCharacterLimit", testPromptBuilderTruncatesAtCharacterLimit),
+    ("srtAppendingMatchesFullFormat", testSRTAppendingMatchesFullFormat)
 ]
 
 var failed = 0
