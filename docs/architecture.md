@@ -2,7 +2,7 @@
 
 ## Runtime Pipeline
 
-1. Capture audio from the selected macOS input device.
+1. Capture audio from the selected app audio interface, or from the current macOS system default input.
 2. Feed audio frames into a local speech recognizer.
 3. Keep raw partial transcript chunks in an operator-only draft buffer.
 4. Stabilize partial transcript chunks before public display.
@@ -25,7 +25,7 @@ The right side is split into task-focused workspaces:
 - Logs: current session status, expected files, and captured caption history.
 - Models: WhisperKit model selection, preparation, offline readiness status, prepare guidance, and resource checks.
 - Translation: translation mode, engine settings, and test input/output.
-- Audio: input status, level, clipping, and recording status.
+- Audio: audio interface selection, input status, level, clipping, power, and recording status.
 - Output: output-window actions, background presets, signal status, and preview.
 
 The workspace layout is responsive: setup-heavy views use columns when there is enough horizontal space and stack when the window is narrower. Workspace buttons have subtle surfaces and borders so operators can read them as clickable controls without turning the app into a heavy toolbar.
@@ -43,6 +43,12 @@ The capture picker uses task-focused labels:
 WhisperKit can take a few seconds on the first start while the model loads and prewarms. After Stop, the app keeps the loaded model in memory so a later Start can resume faster.
 
 The Models workspace explains what `Prepare Offline Model` does, shows current app memory usage, and provides a shortcut to Activity Monitor for CPU/GPU inspection. Direct GPU utilization is not read inside the app yet; Activity Monitor remains the trusted macOS source for that.
+
+## Audio Input Selection
+
+The Audio workspace owns the app-level input selector. Operators can leave it on `System default` or choose a specific USB interface. `System default` is passed through to Core Audio as no explicit override, so changing the macOS default input still works as expected.
+
+When a previously selected interface is missing, the app reports that status and falls back to the system default instead of failing the session start. The selected input is shared by the audio meter, CAF recording, and WhisperKit capture path.
 
 ## Power Management
 

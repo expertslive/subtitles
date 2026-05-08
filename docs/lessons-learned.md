@@ -39,6 +39,9 @@
 - For 09:00 to 17:45, reserve about 20 GB per stage per day.
 - A realistic full-day stereo 48 kHz 32-bit float recording is about 12.1 GB.
 - Future Audio/Logs UI should show sample rate, channel count, recording format, MB/hour, and remaining recording time.
+- App-level audio input selection is useful at venues because operators should not have to leave the app to switch between the Mac microphone and a USB audio interface.
+- `System default` should remain a live Core Audio default, not a captured device ID. Pass no explicit device override when the operator chooses system default.
+- If a selected USB interface disappears, fall back to system default and show a clear status rather than blocking Start.
 
 ## SwiftUI And macOS Implementation
 
@@ -77,7 +80,6 @@
 - Add Audio/Logs storage estimator.
 - Add previous-session browser in Logs.
 - Add SRT regeneration and cleanup tooling in Logs.
-- Add in-app audio input selection instead of relying only on macOS default input.
 - Add display selection and test cards in Output.
 - Add richer glossary metadata and suggestions from previous session folders.
 - Refine calm caption heuristics after real event testing.

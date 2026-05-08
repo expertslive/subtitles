@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import Darwin
 import EventSubtitlesCore
 import SwiftUI
@@ -134,11 +135,8 @@ final class AppState: ObservableObject {
             }
 
             do {
-                let inputDeviceID = AudioDeviceInspector
-                    .inputDevice(id: self.effectiveAudioInputDeviceID)?
-                    .deviceID
                 try await self.audioMonitor.start(
-                    inputDeviceID: inputDeviceID,
+                    inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                     recordingURL: self.sessionRecorder.audioRecordingURL
                 ) { [weak self] level in
                     Task { @MainActor [weak self] in
@@ -255,6 +253,16 @@ final class AppState: ObservableObject {
 
     func useSystemDefaultAudioInput() {
         setSelectedAudioInputDeviceID(nil)
+    }
+
+    private func selectedAudioInputDeviceForCapture() -> AudioDeviceID? {
+        refreshAudioInputDevice()
+        guard let selectedAudioInputDeviceID,
+              effectiveAudioInputDeviceID == selectedAudioInputDeviceID else {
+            return nil
+        }
+
+        return AudioDeviceInspector.inputDevice(id: selectedAudioInputDeviceID)?.deviceID
     }
 
     private func publishAudioLevel(_ level: Double) {
@@ -834,11 +842,8 @@ final class AppState: ObservableObject {
 
                 do {
                     self.whisperKitTranscriber.setModelName(self.whisperModelName)
-                    let inputDeviceID = AudioDeviceInspector
-                        .inputDevice(id: self.effectiveAudioInputDeviceID)?
-                        .deviceID
                     try await self.whisperKitTranscriber.start(
-                        inputDeviceID: inputDeviceID,
+                        inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
                             glossary: self.glossaryText

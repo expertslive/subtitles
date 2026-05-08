@@ -2,16 +2,17 @@
 
 ## Before The Event
 
-1. Connect the USB audio interface and select it as the macOS default input.
+1. Connect the USB audio interface.
 2. Launch `build/EventSubtitles.app`.
-3. Confirm the Session panel shows the expected input device and sample rate.
-4. Set `Capture` to `Live subtitles` for a real event, or `Demo captions` for screen checks.
-5. Open the Models workspace, choose a WhisperKit model, and run `Prepare Offline Model` while online.
-6. Switch Wi-Fi off and run a short WhisperKit test to confirm the model is cached.
-7. Open the Glossary workspace and add, import, or bulk-paste the session glossary.
-8. Open the Output workspace, show the output window, and move it to the HDMI display.
-9. Use `Fill Display` and confirm the downstream video switcher keys the chroma green correctly.
-10. Leave `Keep Mac awake` enabled unless another venue power plan is managing the machine.
+3. Open the Audio workspace and select the interface, or leave it on `System default` if macOS is already set correctly.
+4. Confirm the Session panel shows the expected input device and sample rate.
+5. Set `Capture` to `Live subtitles` for a real event, or `Demo captions` for screen checks.
+6. Open the Models workspace, choose a WhisperKit model, and run `Prepare Offline Model` while online.
+7. Switch Wi-Fi off and run a short WhisperKit test to confirm the model is cached.
+8. Open the Glossary workspace and add, import, or bulk-paste the session glossary.
+9. Open the Output workspace, show the output window, and move it to the HDMI display.
+10. Use `Fill Display` and confirm the downstream video switcher keys the chroma green correctly.
+11. Leave `Keep Mac awake` enabled unless another venue power plan is managing the machine.
 
 ## Recommended Settings
 
@@ -56,7 +57,7 @@
 - Logs: inspect session status, expected files, and captured captions.
 - Models: prepare WhisperKit models, verify offline readiness, and check app memory/resource guidance.
 - Translation: configure translation mode and local translation commands.
-- Audio: check input status, audio level, clipping, and recording status.
+- Audio: select the input interface, check fallback/default status, audio level, clipping, power, and recording status.
 - Output: show/fill/restore the output window and choose chroma or black background.
 
 ## After The Event
