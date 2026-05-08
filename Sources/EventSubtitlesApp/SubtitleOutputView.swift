@@ -47,23 +47,24 @@ struct SubtitleOutputView: View {
     }
 
     private var captionLines: some View {
-        VStack(spacing: state.lineSpacing) {
-            ForEach(Array(state.captionLayout.lines.enumerated()), id: \.offset) { _, line in
-                Text(line)
-                    .font(.custom(state.fontName, size: state.fontSize).weight(.bold))
-                    .foregroundStyle(state.foregroundColor)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.58)
-                    .allowsTightening(false)
-                    .shadow(
-                        color: state.shadowEnabled ? .black.opacity(0.82) : .clear,
-                        radius: state.shadowRadius,
-                        x: 0,
-                        y: 2
-                    )
-            }
-        }
-        .frame(maxWidth: .infinity)
+        // Render all visible lines as a SINGLE Text with embedded newlines so SwiftUI's
+        // `.minimumScaleFactor` applies uniformly to the whole block. With per-line Text
+        // views, each line scaled independently — a short line at full size, a long line
+        // shrunk — visually inconsistent on the projector.
+        Text(state.captionLayout.text)
+            .font(.custom(state.fontName, size: state.fontSize).weight(.bold))
+            .foregroundStyle(state.foregroundColor)
+            .multilineTextAlignment(.center)
+            .lineSpacing(state.lineSpacing)
+            .lineLimit(state.maxLines)
+            .minimumScaleFactor(0.58)
+            .allowsTightening(false)
+            .shadow(
+                color: state.shadowEnabled ? .black.opacity(0.82) : .clear,
+                radius: state.shadowRadius,
+                x: 0,
+                y: 2
+            )
+            .frame(maxWidth: .infinity)
     }
 }
