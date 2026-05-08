@@ -895,7 +895,8 @@ final class AppState: ObservableObject {
             isFinal: result.isFinal,
             detectedLanguage: result.language,
             startedAt: result.startedAt,
-            endedAt: result.endedAt
+            endedAt: result.endedAt,
+            words: result.words
         )
     }
 
@@ -904,7 +905,8 @@ final class AppState: ObservableObject {
         isFinal: Bool,
         detectedLanguage: SourceLanguage? = nil,
         startedAt: Date? = nil,
-        endedAt: Date? = nil
+        endedAt: Date? = nil,
+        words: [RecognizedWord] = []
     ) {
         Task { @MainActor [weak self] in
             await self?.processTranscript(
@@ -912,7 +914,8 @@ final class AppState: ObservableObject {
                 isFinal: isFinal,
                 detectedLanguage: detectedLanguage,
                 startedAt: startedAt,
-                endedAt: endedAt
+                endedAt: endedAt,
+                words: words
             )
         }
     }
@@ -922,7 +925,8 @@ final class AppState: ObservableObject {
         isFinal: Bool,
         detectedLanguage: SourceLanguage? = nil,
         startedAt: Date? = nil,
-        endedAt: Date? = nil
+        endedAt: Date? = nil,
+        words: [RecognizedWord] = []
     ) async {
         let now = Date()
         let corrector = GlossaryCorrector(rawGlossary: glossaryText)
@@ -955,7 +959,7 @@ final class AppState: ObservableObject {
             return
         }
 
-        let snapshot = TranscriptSnapshot(text: text, createdAt: now, isFinal: isFinal)
+        let snapshot = TranscriptSnapshot(text: text, createdAt: now, isFinal: isFinal, words: words)
         lastCaptionSnapshotAt = isFinal ? nil : snapshot.createdAt
 
         let phrases = captionStabilityEngine.ingest(

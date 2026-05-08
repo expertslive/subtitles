@@ -63,19 +63,22 @@ public struct SpeechRecognitionResult: Equatable, Sendable {
     public let isFinal: Bool
     public let startedAt: Date?
     public let endedAt: Date?
+    public let words: [RecognizedWord]
 
     public init(
         text: String,
         language: SourceLanguage,
         isFinal: Bool,
         startedAt: Date? = nil,
-        endedAt: Date? = nil
+        endedAt: Date? = nil,
+        words: [RecognizedWord] = []
     ) {
         self.text = text
         self.language = language
         self.isFinal = isFinal
         self.startedAt = startedAt
         self.endedAt = endedAt
+        self.words = words
     }
 }
 

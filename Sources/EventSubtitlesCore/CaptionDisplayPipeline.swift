@@ -96,11 +96,18 @@ public struct TranscriptSnapshot: Equatable, Sendable {
     public var text: String
     public var createdAt: Date
     public var isFinal: Bool
+    public var words: [RecognizedWord]
 
-    public init(text: String, createdAt: Date = Date(), isFinal: Bool) {
+    public init(
+        text: String,
+        createdAt: Date = Date(),
+        isFinal: Bool,
+        words: [RecognizedWord] = []
+    ) {
         self.text = text
         self.createdAt = createdAt
         self.isFinal = isFinal
+        self.words = words
     }
 }
 

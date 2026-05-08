@@ -75,7 +75,7 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             detectLanguage: configuration.sourceLanguage == .automatic,
             skipSpecialTokens: true,
             withoutTimestamps: false,
-            wordTimestamps: false,
+            wordTimestamps: true,
             promptTokens: promptTokens,
             chunkingStrategy: .vad
         )
@@ -153,7 +153,8 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
                         language: configuredLanguage,
                         isFinal: true,
                         startedAt: absoluteDate(for: segment.start),
-                        endedAt: absoluteDate(for: segment.end)
+                        endedAt: absoluteDate(for: segment.end),
+                        words: recognizedWords(in: [segment])
                     )
                 )
             }
@@ -168,10 +169,33 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
                     language: configuredLanguage,
                     isFinal: false,
                     startedAt: nil,
-                    endedAt: Date()
+                    endedAt: Date(),
+                    words: recognizedWords(in: state.unconfirmedSegments)
                 )
             )
         }
+    }
+
+    private func recognizedWords(in segments: some Sequence<TranscriptionSegment>) -> [RecognizedWord] {
+        var words: [RecognizedWord] = []
+        for segment in segments {
+            guard let segmentWords = segment.words else {
+                continue
+            }
+            for word in segmentWords {
+                let trimmed = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                words.append(
+                    RecognizedWord(
+                        text: trimmed,
+                        probability: Float(word.probability),
+                        startSeconds: Double(word.start),
+                        endSeconds: Double(word.end)
+                    )
+                )
+            }
+        }
+        return words
     }
 
     private func partialText(from state: AudioStreamTranscriber.State) -> String {
