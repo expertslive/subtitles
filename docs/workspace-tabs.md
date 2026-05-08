@@ -350,3 +350,5 @@ The first implementation can be layout-only, moving the existing controls into t
 Implemented v3.0.0 redesign: NavigationSplitView sidebar, toolbar with global controls, Now panel, preview-first Style workspace, row-based Glossary workspace, and stable Calm Blocks public output with idle-tail flush.
 
 Implemented v3.1.0 audio input selection: the Audio workspace can choose `System default` or a specific input interface, and the selected input is shared by metering, CAF recording, and WhisperKit capture.
+
+Implemented v3.2.0 live hardening: a single audio capture pipeline feeds metering, CAF recording, and WhisperKit; TV-style roll-up captions hold stable logical lines; panic blank clears and blanks public output for recovery.

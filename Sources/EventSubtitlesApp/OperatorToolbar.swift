@@ -78,7 +78,7 @@ extension OperatorView {
                         title: "Stop",
                         systemImage: "stop.fill",
                         tint: .red,
-                        action: state.stop
+                        action: { Task { await state.stop() } }
                     )
                     .keyboardShortcut(".", modifiers: .command)
 
@@ -95,6 +95,20 @@ extension OperatorView {
                     )
                     .keyboardShortcut("r", modifiers: .command)
                 }
+
+                ToolbarRoundButton(
+                    title: state.outputBlanked ? "Unblank output" : "Panic blank",
+                    systemImage: state.outputBlanked ? "eye" : "eye.slash.fill",
+                    tint: state.outputBlanked ? .gray : .orange,
+                    action: {
+                        if state.outputBlanked {
+                            state.unblankOutput()
+                        } else {
+                            state.panicBlank()
+                        }
+                    }
+                )
+                .keyboardShortcut("b", modifiers: [.command, .shift])
 
                 HStack(spacing: 8) {
                     ToolbarIconButton(

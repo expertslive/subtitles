@@ -10,7 +10,7 @@ public enum CaptionDisplayMode: String, CaseIterable, Codable, Identifiable, Sen
     public var label: String {
         switch self {
         case .calmBlocks: "Calm Blocks"
-        case .liveRollUp: "Live Roll-up"
+        case .liveRollUp: "Live Roll-up (TV-style)"
         case .fastDraft: "Fast Draft"
         }
     }
@@ -20,7 +20,7 @@ public enum CaptionDisplayMode: String, CaseIterable, Codable, Identifiable, Sen
         case .calmBlocks:
             "Shows stable caption blocks after a short delay."
         case .liveRollUp:
-            "Appends stable phrases into a rolling caption stack."
+            "Line-paced rolling captions like broadcast TV. Each line dwells long enough to read before scrolling up."
         case .fastDraft:
             "Shows raw draft captions immediately for testing."
         }
@@ -44,25 +44,25 @@ public enum CaptionStabilityLevel: String, CaseIterable, Codable, Identifiable, 
 
     public var defaultUnstableWordCount: Int {
         switch self {
-        case .fast: 2
-        case .balanced: 3
-        case .calm: 4
+        case .fast: 1
+        case .balanced: 2
+        case .calm: 3
         }
     }
 
     public var defaultCommitDelay: TimeInterval {
         switch self {
-        case .fast: 0.55
-        case .balanced: 0.85
-        case .calm: 1.1
+        case .fast: 0.25
+        case .balanced: 0.4
+        case .calm: 0.6
         }
     }
 
     public var defaultMinimumHold: TimeInterval {
         switch self {
-        case .fast: 1.0
-        case .balanced: 1.25
-        case .calm: 1.45
+        case .fast: 0.7
+        case .balanced: 0.95
+        case .calm: 1.2
         }
     }
 }
@@ -74,6 +74,8 @@ public struct CaptionDisplayConfiguration: Equatable, Codable, Sendable {
     public var unstableWordCount: Int
     public var minimumHold: TimeInterval
     public var maximumLatency: TimeInterval
+    public var lineMinHold: TimeInterval
+    public var idleFlushAfter: TimeInterval
 
     public init(
         mode: CaptionDisplayMode = .calmBlocks,
@@ -81,7 +83,9 @@ public struct CaptionDisplayConfiguration: Equatable, Codable, Sendable {
         commitDelay: TimeInterval? = nil,
         unstableWordCount: Int? = nil,
         minimumHold: TimeInterval? = nil,
-        maximumLatency: TimeInterval = 3.0
+        maximumLatency: TimeInterval = 3.0,
+        lineMinHold: TimeInterval = 2.0,
+        idleFlushAfter: TimeInterval = 1.5
     ) {
         self.mode = mode
         self.stability = stability
@@ -89,6 +93,8 @@ public struct CaptionDisplayConfiguration: Equatable, Codable, Sendable {
         self.unstableWordCount = max(0, min(8, unstableWordCount ?? stability.defaultUnstableWordCount))
         self.minimumHold = max(0.4, min(5.0, minimumHold ?? stability.defaultMinimumHold))
         self.maximumLatency = max(self.commitDelay, min(8.0, maximumLatency))
+        self.lineMinHold = max(0.5, min(5.0, lineMinHold))
+        self.idleFlushAfter = max(0.3, min(4.0, idleFlushAfter))
     }
 }
 
@@ -96,11 +102,18 @@ public struct TranscriptSnapshot: Equatable, Sendable {
     public var text: String
     public var createdAt: Date
     public var isFinal: Bool
+    public var words: [RecognizedWord]
 
-    public init(text: String, createdAt: Date = Date(), isFinal: Bool) {
+    public init(
+        text: String,
+        createdAt: Date = Date(),
+        isFinal: Bool,
+        words: [RecognizedWord] = []
+    ) {
         self.text = text
         self.createdAt = createdAt
         self.isFinal = isFinal
+        self.words = words
     }
 }
 
@@ -150,6 +163,7 @@ public struct CaptionCue: Identifiable, Equatable, Sendable {
 public struct CaptionStabilityEngine: Sendable {
     private var previousTokens: [CaptionToken] = []
     private var committedTokenCount = 0
+    private static let confidenceThreshold: Float = 0.7
 
     public init() {}
 
@@ -184,21 +198,18 @@ public struct CaptionStabilityEngine: Sendable {
             ]
         }
 
-        guard !previousTokens.isEmpty else {
-            previousTokens = tokens
-            return []
-        }
-
-        let commonPrefix = commonPrefixCount(previousTokens, tokens)
-        if commonPrefix < committedTokenCount {
-            committedTokenCount = 0
-        }
-        let publishableCount = min(
-            commonPrefix,
-            max(0, tokens.count - configuration.unstableWordCount)
+        let publishableCount = computePublishableCount(
+            tokens: tokens,
+            words: snapshot.words,
+            configuration: configuration
         )
 
         previousTokens = tokens
+
+        // If the stable prefix shrank (e.g. new utterance after flush), reset the committed pointer.
+        if publishableCount < committedTokenCount {
+            committedTokenCount = publishableCount
+        }
 
         guard publishableCount > committedTokenCount else {
             return []
@@ -245,6 +256,46 @@ public struct CaptionStabilityEngine: Sendable {
                 isFinal: isFinal
             )
         ]
+    }
+
+    private func computePublishableCount(
+        tokens: [CaptionToken],
+        words: [RecognizedWord],
+        configuration: CaptionDisplayConfiguration
+    ) -> Int {
+        let trailingHold = max(0, tokens.count - configuration.unstableWordCount)
+
+        // No word-level confidences available → keep the prior prefix-agreement rule.
+        if words.isEmpty || words.count != tokens.count {
+            guard !previousTokens.isEmpty else {
+                return committedTokenCount
+            }
+            let commonPrefix = commonPrefixCount(previousTokens, tokens)
+            if commonPrefix < committedTokenCount {
+                // prefix changed under us; reset committed pointer
+                return commonPrefix
+            }
+            return min(commonPrefix, trailingHold)
+        }
+
+        // Word confidences available: commit a word as soon as
+        //   - it is within the trailing-hold horizon, AND
+        //   - it has probability ≥ threshold OR it agreed with the same position in previousTokens.
+        let priorPrefix = commonPrefixCount(previousTokens, tokens)
+
+        var publishable = committedTokenCount
+        let horizon = trailingHold
+        while publishable < horizon {
+            let word = words[publishable]
+            let confident = word.probability >= Self.confidenceThreshold
+            let agreedWithPrior = publishable < priorPrefix
+            if confident || agreedWithPrior {
+                publishable += 1
+            } else {
+                break
+            }
+        }
+        return publishable
     }
 
     private func commonPrefixCount(_ left: [CaptionToken], _ right: [CaptionToken]) -> Int {

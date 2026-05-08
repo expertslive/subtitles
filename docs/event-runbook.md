@@ -25,6 +25,7 @@
   - use Automatic only when the speaker language is unknown
 - Captions:
   - Display Flow: `Calm Blocks` for normal conference screens
+  - Display Flow: `Live Roll-up (TV-style)` for fast speakers or broadcast-style lower thirds
   - Stability: `Calm` for public output, `Fast Draft` only for testing
   - 2 lines for lower-third broadcast use
   - 3 lines for accessibility screens
@@ -39,7 +40,7 @@
 3. Confirm the sleep status changes to `Awake on`.
 4. Watch the input meter and transcript preview.
 5. Use manual captions for emergency messages or sponsor/talk titles.
-6. Press Clear if a bad partial needs to disappear immediately.
+6. Use Panic blank if the public output must disappear immediately.
 7. Keep Live visible while operating captions.
 8. Use Logs only when validating that segments are being recorded.
 
@@ -83,11 +84,8 @@ Use `segments.jsonl` for any future cleanup/export tooling because it keeps sour
 
 For a full event day from 09:00 to 17:45, reserve storage mostly for `input-audio.caf`.
 
-Approximate CAF sizes for 8 hours 45 minutes:
+The current CAF records the 16 kHz mono Float32 ASR feed. Approximate size for 8 hours 45 minutes:
 
-- 48 kHz mono, 16-bit: about 3.0 GB.
-- 48 kHz stereo, 16-bit: about 6.0 GB.
-- 48 kHz mono, 32-bit float: about 6.0 GB.
-- 48 kHz stereo, 32-bit float: about 12.1 GB.
+- 16 kHz mono, 32-bit float: about 2.0 GB.
 
-Plan for 20 GB free per stage per full day. This gives room for stereo 32-bit float input, logs, exported files, and operational margin.
+Plan for 5 GB free per stage per full day for the current recorder, and keep more free space available if a future full-quality recording mode is added.

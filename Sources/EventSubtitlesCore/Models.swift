@@ -79,3 +79,27 @@ public struct CaptionLayout: Equatable, Sendable {
         lines.joined(separator: "\n")
     }
 }
+
+public struct RecognizedWord: Equatable, Sendable {
+    public let text: String
+    public let normalized: String
+    public let probability: Float
+    public let startSeconds: Double?
+    public let endSeconds: Double?
+
+    public init(
+        text: String,
+        normalized: String? = nil,
+        probability: Float,
+        startSeconds: Double? = nil,
+        endSeconds: Double? = nil
+    ) {
+        self.text = text
+        self.normalized = normalized ?? text
+            .trimmingCharacters(in: .punctuationCharacters)
+            .lowercased()
+        self.probability = probability
+        self.startSeconds = startSeconds
+        self.endSeconds = endSeconds
+    }
+}

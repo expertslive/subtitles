@@ -62,6 +62,17 @@ public enum SRTFormatter {
             .joined(separator: "\n\n")
     }
 
+    public static func cue(for segment: CaptionSegmentRecord, useDisplayText: Bool) -> String {
+        let body = useDisplayText ? segment.displayText : segment.sourceText
+        return """
+        \(segment.index)
+        \(timestamp(segment.startSeconds)) --> \(timestamp(segment.endSeconds))
+        \(body)
+
+
+        """
+    }
+
     public static func timestamp(_ seconds: TimeInterval) -> String {
         let totalMilliseconds = max(0, Int((seconds * 1_000).rounded()))
         let hours = totalMilliseconds / 3_600_000

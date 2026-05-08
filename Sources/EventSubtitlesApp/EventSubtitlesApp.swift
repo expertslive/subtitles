@@ -27,10 +27,22 @@ struct EventSubtitlesApp: App {
                 .disabled(appState.isRunning)
 
                 Button("Stop") {
-                    appState.stop()
+                    Task { await appState.stop() }
                 }
                 .keyboardShortcut(".", modifiers: .command)
                 .disabled(!appState.isRunning)
+
+                Divider()
+
+                Button("Panic Blank") {
+                    appState.panicBlank()
+                }
+                .keyboardShortcut("k", modifiers: .command)
+
+                Button(appState.outputBlanked ? "Unblank Output" : "Blank Output") {
+                    appState.toggleOutputBlank()
+                }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
             }
 
             CommandMenu("Workspace") {
@@ -62,8 +74,8 @@ struct EventSubtitlesApp: App {
 
     private func showAboutPanel() {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "3.1.0"
-        let build = info?["CFBundleVersion"] as? String ?? "6"
+        let version = info?["CFBundleShortVersionString"] as? String ?? "3.2.0"
+        let build = info?["CFBundleVersion"] as? String ?? "7"
         let credits = NSAttributedString(
             string: """
             Offline live subtitles and Dutch/English translation for events.

@@ -7,6 +7,16 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppState: ObservableObject {
+    static let chromaKeyGreen = Color(.sRGB, red: 0.0, green: 177.0 / 255.0, blue: 64.0 / 255.0, opacity: 1.0)
+
+    static func colorMatches(_ a: Color, _ b: Color, tolerance: CGFloat = 0.01) -> Bool {
+        let lhs = NSColor(a).usingColorSpace(.sRGB) ?? NSColor(a)
+        let rhs = NSColor(b).usingColorSpace(.sRGB) ?? NSColor(b)
+        return abs(lhs.redComponent - rhs.redComponent) < tolerance
+            && abs(lhs.greenComponent - rhs.greenComponent) < tolerance
+            && abs(lhs.blueComponent - rhs.blueComponent) < tolerance
+    }
+
     @Published var mode: ProcessingMode = .subtitlesOnly {
         didSet {
             if mode != .subtitlesOnly {
@@ -36,8 +46,14 @@ final class AppState: ObservableObject {
     @Published var translationCommandArguments = "--from {source} --to {target}"
 
     @Published var currentEvent: TranscriptEvent?
-    @Published var publicCaptionText = "Ready"
-    @Published var captionLayout = CaptionLayout(lines: ["Ready"])
+    @Published var publicCaptionText = "" {
+        didSet {
+            if !publicCaptionText.isEmpty && publicCaptionText != oldValue {
+                lastCaptionActivityAt = Date()
+            }
+        }
+    }
+    @Published var captionLayout = CaptionLayout(lines: [])
     @Published var history: [TranscriptEvent] = []
 
     @Published var fontName = "Helvetica Neue"
@@ -53,7 +69,7 @@ final class AppState: ObservableObject {
     @Published var safeMargin = 78.0
     @Published var lineSpacing = 8.0
     @Published var foregroundColor = Color.white
-    @Published var backgroundColor = Color(red: 0.0, green: 0.82, blue: 0.0)
+    @Published var backgroundColor = AppState.chromaKeyGreen
     @Published var shadowEnabled = true
     @Published var shadowRadius = 7.0
     @Published var captionPosition: CaptionVerticalPosition = .bottom
@@ -65,6 +81,12 @@ final class AppState: ObservableObject {
     @Published var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
     @Published var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
     @Published var captionMaximumLatency = 3.0
+    @Published var captionLineMinHold = 2.0
+    @Published var captionIdleFlushAfter = 1.5
+    /// Seconds of caption inactivity after which the green output auto-clears.
+    /// 0 disables the auto-clear (captions stay on screen until cleared manually
+    /// or until the next session begins).
+    @Published var captionAutoClearAfter = 5.0
     @Published var draftEvent: TranscriptEvent?
     @Published var stableCaptionQueueText = ""
     @Published var captionDisplayLatencyText = "0.0s"
@@ -80,6 +102,7 @@ final class AppState: ObservableObject {
     """
 
     @Published var manualCaption = ""
+    @Published var outputBlanked = false
     @Published var sessionLogStatus = "No active session"
     @Published var sessionDirectoryPath: String?
     @Published var sessionSegmentCount = 0
@@ -90,17 +113,24 @@ final class AppState: ObservableObject {
 
     private let simulatorTranscriber = MockLocalTranscriber()
     private let whisperKitTranscriber = WhisperKitTranscriber()
-    private let audioMonitor = AudioLevelMonitor()
+    private let capturePipeline = AudioCapturePipeline()
     private let translator = RuleBasedTranslator()
     private let commandLineTranslator = CommandLineTranslator()
     private let sessionRecorder = SessionRecorder()
+    private let sessionLogger = SessionLogger()
     private let settingsStore = AppSettingsStore()
     private let sleepPreventer = SleepPreventer()
     private var captionStabilityEngine = CaptionStabilityEngine()
     private var captionDisplayScheduler = CaptionDisplayScheduler()
+    private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     private var outputController: OutputWindowController?
     private var sessionStartedAt: Date?
     private var lastCaptionSnapshotAt: Date?
+    private var lastCaptionActivityAt: Date?
+    /// Pixel width of the live output window's render area. Set by SubtitleOutputView
+    /// when it has `governsLayout: true`. Drives the `effectiveTargetCharactersPerLine`
+    /// calculation so each logical line fits on one visual row at the chosen font.
+    private var outputRenderWidth: CGFloat = 0
     private var sessionTimer: Timer?
     private var captionDisplayTimer: Timer?
     private var lastDetectedLanguageForDisplay: SourceLanguage?
@@ -130,41 +160,50 @@ final class AppState: ObservableObject {
         refreshResourceUsage()
 
         Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
+            guard let self else { return }
             do {
-                try await self.audioMonitor.start(
+                try await self.capturePipeline.start(
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
-                    recordingURL: self.sessionRecorder.audioRecordingURL
-                ) { [weak self] level in
-                    Task { @MainActor [weak self] in
-                        self?.publishAudioLevel(Double(level))
+                    recordingURL: self.sessionRecorder.audioRecordingURL,
+                    onLevel: { [weak self] sample in
+                        Task { @MainActor [weak self] in
+                            self?.publishAudioLevel(Double(max(sample.rms, sample.peak)))
+                        }
+                    },
+                    onSamples: { [weak self] samples in
+                        // Audio thread → Whisper. ingest is non-blocking and thread-safe
+                        // (StreamFedAudioProcessor uses an NSLock on its sample buffer).
+                        self?.whisperKitTranscriber.ingest(samples)
+                    },
+                    onConfigurationChange: { [weak self] in
+                        Task { @MainActor [weak self] in
+                            self?.handleAudioConfigurationChange()
+                        }
                     }
-                }
+                )
             } catch {
-                self.errorMessage = "Audio level unavailable: \(error.localizedDescription)"
+                self.sessionLogger.error("Audio capture start failed: \(error.localizedDescription)")
+                self.errorMessage = "Audio capture unavailable: \(error.localizedDescription)"
             }
         }
 
         startTranscriptionEngine()
     }
 
-    func stop() {
-        guard isRunning else {
-            return
-        }
+    func stop() async {
+        guard isRunning else { return }
 
         simulatorTranscriber.stopNow()
-        Task {
-            await whisperKitTranscriber.stop()
-        }
-        audioMonitor.stop()
+        await whisperKitTranscriber.stop()
+        capturePipeline.stop()
         audioLevel = 0
         isRunning = false
         engineStatus = transcriptionEngine.idleStatusLabel
-        publishNextCaptionCue(force: true)
+        if captionDisplayMode == .liveRollUp {
+            flushLinePacedOutput(now: Date())
+        } else {
+            publishNextCaptionCue(force: true)
+        }
         stopCaptionDisplayTimer()
         stopSleepPrevention()
         stopSessionTimer()
@@ -183,11 +222,20 @@ final class AppState: ObservableObject {
     }
 
     func clearCaptions() {
-        currentEvent = nil
-        draftEvent = nil
-        publicCaptionText = ""
-        captionLayout = CaptionLayout(lines: [])
-        resetCaptionDisplayPipeline(clearOutput: false)
+        resetCaptionDisplayPipeline(clearOutput: true)
+    }
+
+    func panicBlank() {
+        outputBlanked = true
+        resetCaptionDisplayPipeline(clearOutput: true)
+    }
+
+    func toggleOutputBlank() {
+        outputBlanked.toggle()
+    }
+
+    func unblankOutput() {
+        outputBlanked = false
     }
 
     func showOutputWindow() {
@@ -209,7 +257,7 @@ final class AppState: ObservableObject {
     }
 
     func useChromaGreen() {
-        backgroundColor = Color(red: 0.0, green: 0.82, blue: 0.0)
+        backgroundColor = AppState.chromaKeyGreen
     }
 
     func useBlackBackground() {
@@ -255,6 +303,34 @@ final class AppState: ObservableObject {
         setSelectedAudioInputDeviceID(nil)
     }
 
+    @MainActor
+    private func handleAudioConfigurationChange() {
+        refreshAudioInputDevice()
+        sessionLogger.warn("Audio configuration change; restarting capture")
+        guard isRunning else { return }
+
+        let priorDescription = audioInputDescription
+        engineStatus = "Capture restarting"
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.capturePipeline.restart(
+                    inputDeviceID: self.selectedAudioInputDeviceForCapture(),
+                    recordingURL: nil
+                )
+                self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
+                if priorDescription != self.audioInputDescription {
+                    self.errorMessage = "Audio device changed: \(self.audioInputDescription)"
+                }
+            } catch {
+                self.sessionLogger.error("Capture restart failed: \(error.localizedDescription)")
+                self.engineStatus = "Capture restart failed"
+                self.errorMessage = "Audio capture restart failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func selectedAudioInputDeviceForCapture() -> AudioDeviceID? {
         refreshAudioInputDevice()
         guard let selectedAudioInputDeviceID,
@@ -286,8 +362,51 @@ final class AppState: ObservableObject {
             commitDelay: captionCommitDelay,
             unstableWordCount: captionUnstableWordCount,
             minimumHold: captionMinimumHold,
-            maximumLatency: captionMaximumLatency
+            maximumLatency: captionMaximumLatency,
+            lineMinHold: captionLineMinHold,
+            idleFlushAfter: captionIdleFlushAfter
         )
+    }
+
+    /// Called by `SubtitleOutputView` (with `governsLayout: true`) on appear and
+    /// on width changes. Records the actual render width so wrap can be tuned
+    /// to fit one logical line on one visual row at the chosen font size.
+    func applyOutputRenderWidth(_ width: CGFloat) {
+        let clamped = max(0, width)
+        if abs(clamped - outputRenderWidth) > 1 {
+            outputRenderWidth = clamped
+        }
+    }
+
+    /// Pixel-aware wrap target. Computes how many characters of the current
+    /// font fit in the available width, then caps with the operator's
+    /// "Line width" slider. Falls back to the slider value if no width has
+    /// been observed yet (e.g., output window not opened).
+    var effectiveTargetCharactersPerLine: Int {
+        let sliderValue = max(8, targetCharactersPerLine)
+        guard outputRenderWidth > 0 else { return sliderValue }
+
+        let availableWidth = max(0, outputRenderWidth - 2 * safeMargin)
+        guard availableWidth > 0 else { return sliderValue }
+
+        // Build a representative bold font in the operator's chosen face.
+        let baseFont = NSFont(name: fontName, size: CGFloat(fontSize))
+            ?? NSFont.systemFont(ofSize: CGFloat(fontSize))
+        let boldDescriptor = baseFont.fontDescriptor.withSymbolicTraits(.bold)
+        let font = NSFont(descriptor: boldDescriptor, size: CGFloat(fontSize)) ?? baseFont
+
+        // Measure the average pixel width of a representative wide-character run.
+        // Bold sans-serif fonts at 68pt average ~37–40px per char; using a 10-char
+        // sample averages out kerning variance.
+        let sample = "Mwoenarsl" as NSString
+        let sampleWidth = sample.size(withAttributes: [.font: font]).width
+        let perChar = sampleWidth / CGFloat(sample.length)
+        guard perChar > 0 else { return sliderValue }
+
+        let fits = Int((availableWidth / perChar).rounded(.down)) - 1 // 1-char safety
+        let measured = max(8, fits)
+
+        return min(sliderValue, measured)
     }
 
     func refreshResourceUsage() {
@@ -361,6 +480,9 @@ final class AppState: ObservableObject {
                 captionUnstableWordCount: captionUnstableWordCount,
                 captionMinimumHold: captionMinimumHold,
                 captionMaximumLatency: captionMaximumLatency,
+                captionLineMinHold: captionLineMinHold,
+                captionIdleFlushAfter: captionIdleFlushAfter,
+                captionAutoClearAfter: captionAutoClearAfter,
                 selectedAudioInputDeviceID: selectedAudioInputDeviceID
             )
         )
@@ -434,6 +556,9 @@ final class AppState: ObservableObject {
         captionUnstableWordCount = settings.captionUnstableWordCount ?? captionStabilityLevel.defaultUnstableWordCount
         captionMinimumHold = settings.captionMinimumHold ?? captionStabilityLevel.defaultMinimumHold
         captionMaximumLatency = settings.captionMaximumLatency ?? 3.0
+        captionLineMinHold = settings.captionLineMinHold ?? 2.0
+        captionIdleFlushAfter = settings.captionIdleFlushAfter ?? 1.5
+        captionAutoClearAfter = settings.captionAutoClearAfter ?? 5.0
         selectedAudioInputDeviceID = settings.selectedAudioInputDeviceID
     }
 
@@ -674,6 +799,7 @@ final class AppState: ObservableObject {
             try sleepPreventer.enable(reason: "Subtitles is running an event subtitle session.")
             sleepPreventionStatus = "Awake on"
         } catch {
+            sessionLogger.warn("Sleep prevention failed: \(error.localizedDescription)")
             sleepPreventionStatus = "Awake failed"
             errorMessage = "Sleep prevention unavailable: \(error.localizedDescription)"
         }
@@ -744,6 +870,8 @@ final class AppState: ObservableObject {
                 glossary: glossaryText
             )
             sessionDirectoryPath = url.path
+            sessionLogger.open(at: url)
+            sessionLogger.info("Session started: name=\(sessionName) engine=\(transcriptionEngine.label) model=\(whisperModelName) device=\(audioInputDescription)")
             sessionSegmentCount = 0
             sessionLogStatus = "Recording"
         } catch {
@@ -754,6 +882,7 @@ final class AppState: ObservableObject {
     }
 
     private func stopSessionLog() {
+        sessionLogger.info("Session stopping")
         do {
             try sessionRecorder.stop()
             if sessionDirectoryPath != nil {
@@ -765,6 +894,7 @@ final class AppState: ObservableObject {
             sessionLogStatus = "Save failed"
             errorMessage = "Session log save failed: \(error.localizedDescription)"
         }
+        sessionLogger.close()
     }
 
     private func startSessionTimer() {
@@ -823,7 +953,8 @@ final class AppState: ObservableObject {
                     try await self.simulatorTranscriber.start(
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
-                            glossary: self.glossaryText
+                            glossary: self.glossaryText,
+                            sessionName: self.sessionName
                         )
                     ) { [weak self] result in
                         Task { @MainActor [weak self] in
@@ -836,17 +967,14 @@ final class AppState: ObservableObject {
             }
         case .whisperKit:
             Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-
+                guard let self else { return }
                 do {
                     self.whisperKitTranscriber.setModelName(self.whisperModelName)
                     try await self.whisperKitTranscriber.start(
-                        inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
-                            glossary: self.glossaryText
+                            glossary: self.glossaryText,
+                            sessionName: self.sessionName
                         )
                     ) { [weak self] result in
                         Task { @MainActor [weak self] in
@@ -855,14 +983,16 @@ final class AppState: ObservableObject {
                         }
                     }
                 } catch {
+                    self.sessionLogger.error("WhisperKit start failed: \(error.localizedDescription)")
                     self.engineStatus = "WhisperKit failed"
                     self.errorMessage = "WhisperKit unavailable: \(error.localizedDescription)"
                 }
             }
         case .audioOnly:
             currentEvent = nil
-            publicCaptionText = "Recording audio"
+            publicCaptionText = ""
             recomputeCaption()
+            engineStatus = "Recording audio"
         }
     }
 
@@ -872,7 +1002,8 @@ final class AppState: ObservableObject {
             isFinal: result.isFinal,
             detectedLanguage: result.language,
             startedAt: result.startedAt,
-            endedAt: result.endedAt
+            endedAt: result.endedAt,
+            words: result.words
         )
     }
 
@@ -881,7 +1012,8 @@ final class AppState: ObservableObject {
         isFinal: Bool,
         detectedLanguage: SourceLanguage? = nil,
         startedAt: Date? = nil,
-        endedAt: Date? = nil
+        endedAt: Date? = nil,
+        words: [RecognizedWord] = []
     ) {
         Task { @MainActor [weak self] in
             await self?.processTranscript(
@@ -889,7 +1021,8 @@ final class AppState: ObservableObject {
                 isFinal: isFinal,
                 detectedLanguage: detectedLanguage,
                 startedAt: startedAt,
-                endedAt: endedAt
+                endedAt: endedAt,
+                words: words
             )
         }
     }
@@ -899,7 +1032,8 @@ final class AppState: ObservableObject {
         isFinal: Bool,
         detectedLanguage: SourceLanguage? = nil,
         startedAt: Date? = nil,
-        endedAt: Date? = nil
+        endedAt: Date? = nil,
+        words: [RecognizedWord] = []
     ) async {
         let now = Date()
         let corrector = GlossaryCorrector(rawGlossary: glossaryText)
@@ -932,7 +1066,7 @@ final class AppState: ObservableObject {
             return
         }
 
-        let snapshot = TranscriptSnapshot(text: text, createdAt: now, isFinal: isFinal)
+        let snapshot = TranscriptSnapshot(text: text, createdAt: now, isFinal: isFinal, words: words)
         lastCaptionSnapshotAt = isFinal ? nil : snapshot.createdAt
 
         let phrases = captionStabilityEngine.ingest(
@@ -940,18 +1074,43 @@ final class AppState: ObservableObject {
             configuration: captionDisplayConfiguration
         )
 
+        let isRolling = captionDisplayMode == .liveRollUp
+        let configuration = captionDisplayConfiguration
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
+            maxLines: maxLines
+        )
+
         for phrase in phrases {
             let stableSource = corrector.apply(to: phrase.text)
-            let translated = await translate(stableSource, isFinal: true)
+            let translated = await translate(stableSource, isFinal: phrase.isFinal)
             let display = corrector.apply(to: translated)
-            captionDisplayScheduler.enqueue(
-                sourceText: stableSource,
-                displayText: display,
-                now: phrase.committedAt
-            )
+
+            if isRolling {
+                let rolling = StableCaptionPhrase(
+                    text: display,
+                    committedAt: phrase.committedAt,
+                    isFinal: phrase.isFinal
+                )
+                linePacedRoller.ingest(rolling, now: phrase.committedAt)
+            } else {
+                captionDisplayScheduler.enqueue(
+                    sourceText: stableSource,
+                    displayText: display,
+                    now: phrase.committedAt
+                )
+            }
         }
 
-        publishNextCaptionCue(force: isFinal)
+        if isRolling {
+            refreshLinePacedOutput(
+                now: Date(),
+                configuration: configuration
+            )
+        } else {
+            publishNextCaptionCue(force: isFinal)
+        }
+
         if isFinal {
             lastCaptionSnapshotAt = nil
         }
@@ -1023,9 +1182,110 @@ final class AppState: ObservableObject {
         updateCaptionSchedulerStatus()
     }
 
+    private func refreshLinePacedOutput(
+        now: Date,
+        configuration: CaptionDisplayConfiguration
+    ) {
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
+            maxLines: maxLines
+        )
+        let changed = linePacedRoller.tick(
+            now: now,
+            lineMinHold: configuration.lineMinHold,
+            idleFlushAfter: configuration.idleFlushAfter
+        )
+
+        // Record any lines the line builder emitted since the last refresh into
+        // the history / session log. This is the rolling-mode equivalent of
+        // calmBlocks's recordDisplayedEvent on each scheduler cue.
+        let emittedLines = linePacedRoller.drainEmittedLines()
+        for line in emittedLines {
+            let event = TranscriptEvent(
+                sourceText: line,
+                displayText: line,
+                isFinal: true,
+                createdAt: now
+            )
+            recordDisplayedEvent(event, detectedLanguage: lastDetectedLanguageForDisplay)
+        }
+
+        let lines = linePacedRoller.visibleLines
+        let joined = lines.joined(separator: " ")
+
+        if joined != publicCaptionText {
+            publicCaptionText = joined
+        }
+        if lines != captionLayout.lines {
+            captionLayout = CaptionLayout(lines: lines)
+        }
+
+        updateCaptionSchedulerStatus()
+        _ = changed // explicit no-op so the compiler doesn't complain about the unused return
+    }
+
+    private func flushLinePacedOutput(now: Date) {
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
+            maxLines: maxLines
+        )
+        _ = linePacedRoller.tick(
+            now: now,
+            lineMinHold: 0,
+            idleFlushAfter: 0
+        )
+        refreshLinePacedOutput(
+            now: now,
+            configuration: CaptionDisplayConfiguration(
+                mode: captionDisplayMode,
+                stability: captionStabilityLevel,
+                commitDelay: captionCommitDelay,
+                unstableWordCount: captionUnstableWordCount,
+                minimumHold: captionMinimumHold,
+                maximumLatency: captionMaximumLatency,
+                lineMinHold: 0,
+                idleFlushAfter: 0
+            )
+        )
+    }
+
     private func tickCaptionDisplayPipeline() async {
-        await flushIdleCaptionTailIfNeeded()
-        publishNextCaptionCue()
+        if captionDisplayMode == .liveRollUp {
+            refreshLinePacedOutput(
+                now: Date(),
+                configuration: captionDisplayConfiguration
+            )
+        } else {
+            await flushIdleCaptionTailIfNeeded()
+            publishNextCaptionCue()
+        }
+        checkAutoClearIfNeeded(now: Date())
+    }
+
+    /// If captions have sat unchanged for `captionAutoClearAfter` seconds, clear
+    /// the visible state and reset the underlying pipelines so the next utterance
+    /// starts fresh.
+    private func checkAutoClearIfNeeded(now: Date) {
+        guard captionAutoClearAfter > 0 else { return }
+        guard !publicCaptionText.isEmpty else { return }
+        guard let lastActivity = lastCaptionActivityAt else { return }
+        guard now.timeIntervalSince(lastActivity) >= captionAutoClearAfter else { return }
+
+        captionStabilityEngine.reset()
+        captionDisplayScheduler.reset()
+        linePacedRoller.reset()
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
+            maxLines: maxLines
+        )
+        currentEvent = nil
+        draftEvent = nil
+        publicCaptionText = ""
+        captionLayout = CaptionLayout(lines: [])
+        stableCaptionQueueText = ""
+        captionDisplayLatencyText = "0.0s"
+        lastCaptionSnapshotAt = nil
+        lastCaptionActivityAt = nil
     }
 
     private func flushIdleCaptionTailIfNeeded() async {
@@ -1084,6 +1344,11 @@ final class AppState: ObservableObject {
     private func resetCaptionDisplayPipeline(clearOutput: Bool) {
         captionStabilityEngine.reset()
         captionDisplayScheduler.reset()
+        linePacedRoller.reset()
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
+            maxLines: maxLines
+        )
         stableCaptionQueueText = ""
         captionDisplayLatencyText = "0.0s"
         lastDetectedLanguageForDisplay = nil
@@ -1092,8 +1357,8 @@ final class AppState: ObservableObject {
         if clearOutput {
             currentEvent = nil
             draftEvent = nil
-            publicCaptionText = "Ready"
-            captionLayout = CaptionLayout(lines: ["Ready"])
+            publicCaptionText = ""
+            captionLayout = CaptionLayout(lines: [])
         }
     }
 
@@ -1123,6 +1388,7 @@ final class AppState: ObservableObject {
                     argumentTemplate: translationCommandArguments
                 )
             } catch {
+                sessionLogger.error("Translation failed: \(error.localizedDescription)")
                 errorMessage = "Translation failed: \(error.localizedDescription)"
                 return translator.translate(source, mode: mode)
             }
@@ -1130,6 +1396,16 @@ final class AppState: ObservableObject {
     }
 
     private func recomputeCaption() {
+        if captionDisplayMode == .liveRollUp {
+            linePacedRoller.updateLayout(
+                targetCharactersPerLine: effectiveTargetCharactersPerLine,
+                maxLines: maxLines
+            )
+            captionLayout = CaptionLayout(lines: linePacedRoller.visibleLines)
+            publicCaptionText = captionLayout.text.replacingOccurrences(of: "\n", with: " ")
+            return
+        }
+
         let composer = CaptionComposer(
             maxLines: maxLines,
             targetCharactersPerLine: targetCharactersPerLine
