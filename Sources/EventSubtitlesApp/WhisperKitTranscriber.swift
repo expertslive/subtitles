@@ -78,7 +78,7 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             verbose: false,
             task: .transcribe,
             language: whisperLanguageCode(for: configuration.sourceLanguage),
-            usePrefillPrompt: configuration.sourceLanguage != .automatic,
+            usePrefillPrompt: true,
             detectLanguage: configuration.sourceLanguage == .automatic,
             skipSpecialTokens: true,
             withoutTimestamps: false,
