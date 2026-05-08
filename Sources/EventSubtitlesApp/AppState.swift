@@ -36,8 +36,8 @@ final class AppState: ObservableObject {
     @Published var translationCommandArguments = "--from {source} --to {target}"
 
     @Published var currentEvent: TranscriptEvent?
-    @Published var publicCaptionText = "Ready"
-    @Published var captionLayout = CaptionLayout(lines: ["Ready"])
+    @Published var publicCaptionText = ""
+    @Published var captionLayout = CaptionLayout(lines: [])
     @Published var history: [TranscriptEvent] = []
 
     @Published var fontName = "Helvetica Neue"
@@ -861,8 +861,9 @@ final class AppState: ObservableObject {
             }
         case .audioOnly:
             currentEvent = nil
-            publicCaptionText = "Recording audio"
+            publicCaptionText = ""
             recomputeCaption()
+            engineStatus = "Recording audio"
         }
     }
 
@@ -1092,8 +1093,8 @@ final class AppState: ObservableObject {
         if clearOutput {
             currentEvent = nil
             draftEvent = nil
-            publicCaptionText = "Ready"
-            captionLayout = CaptionLayout(lines: ["Ready"])
+            publicCaptionText = ""
+            captionLayout = CaptionLayout(lines: [])
         }
     }
 
