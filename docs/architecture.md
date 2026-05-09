@@ -3,7 +3,7 @@
 ## Runtime Pipeline
 
 1. Capture audio from the selected app audio interface, or from the current macOS system default input.
-2. Feed audio frames into a local speech recognizer.
+2. Convert the input once to 16 kHz mono Float32 and fan it out to the meter, CAF recorder, and speech recognizer.
 3. Keep raw partial transcript chunks in an operator-only draft buffer.
 4. Stabilize partial transcript chunks before public display.
 5. Apply glossary corrections for technical terms and names.
@@ -50,7 +50,9 @@ The Models workspace explains what `Prepare Offline Model` does, shows current a
 
 The Audio workspace owns the app-level input selector. Operators can leave it on `System default` or choose a specific USB interface. `System default` is passed through to Core Audio as no explicit override, so changing the macOS default input still works as expected.
 
-When a previously selected interface is missing, the app reports that status and falls back to the system default instead of failing the session start. The selected input is shared by the audio meter, CAF recording, and WhisperKit capture path.
+When a previously selected interface is missing, the app reports that status and falls back to the system default instead of failing the session start. The selected input is shared by one capture pipeline that feeds the audio meter, CAF recording, and WhisperKit path.
+
+The capture pipeline owns the only live `AVAudioEngine` in the app. It restarts on Core Audio configuration changes and preserves the open CAF writer during the restart so short device changes do not silently discard the rest of the session recording.
 
 ## Power Management
 
@@ -70,16 +72,13 @@ The app also exposes a Settings scene for setup-oriented Style, Audio, Models, a
 
 ## Recording Storage
 
-Session audio is recorded as `input-audio.caf` using the current input format from AVAudioEngine.
+Session audio is recorded as `input-audio.caf` after conversion to 16 kHz mono Float32, the same stream that feeds WhisperKit. This keeps the recording aligned with the ASR path and makes storage predictable.
 
 For an event day from 09:00 to 17:45, duration is 8 hours 45 minutes, or 31,500 seconds. Approximate CAF storage:
 
-- 48 kHz mono, 16-bit: about 3.0 GB.
-- 48 kHz stereo, 16-bit: about 6.0 GB.
-- 48 kHz mono, 32-bit float: about 6.0 GB.
-- 48 kHz stereo, 32-bit float: about 12.1 GB.
+- 16 kHz mono, 32-bit float: about 2.0 GB.
 
-The realistic planning number is about 12 GB per stage per full day, with 20 GB per stage per day reserved for safety. Transcript, SRT, JSONL, and glossary files are tiny compared with the audio file.
+The practical planning number is 5 GB per stage per full day, with extra free disk space reserved for safety and future higher-quality recording modes. Transcript, SRT, JSONL, and glossary files are tiny compared with the audio file.
 
 ## Event Priorities
 
@@ -101,8 +100,10 @@ Calm Blocks also has an idle-tail flush. If WhisperKit keeps the last words as a
 Implemented display modes:
 
 - Calm Blocks: default conference mode, showing stable blocks after a short delay.
-- Live Roll-up: rolling stable text for faster speakers.
+- Live Roll-up (TV-style): line-paced rolling captions where each logical line holds long enough to read before scrolling.
 - Fast Draft: immediate raw draft output for testing, not recommended for public screens.
+
+The output menu and toolbar include a panic blank for live recovery. Panic blank clears the public caption state and blanks the HDMI output; unblanking does not restore stale text.
 
 Implementation details for future refinements are kept in the local untracked calm-caption display spec.
 

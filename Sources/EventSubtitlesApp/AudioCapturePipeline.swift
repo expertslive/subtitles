@@ -123,16 +123,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
         self.converter = converter
 
         if let recordingURL {
-            do {
-                recordingFile = try AVAudioFile(
-                    forWriting: recordingURL,
-                    settings: whisperFormat.settings,
-                    commonFormat: .pcmFormatFloat32,
-                    interleaved: false
-                )
-            } catch {
-                throw AudioCapturePipelineError.recordingUnavailable(error.localizedDescription)
-            }
+            recordingFile = try openRecordingFile(at: recordingURL)
         } else if !preserveExistingRecording {
             recordingFile = nil
         }
@@ -232,9 +223,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
 
         var error: NSError?
-        let inputProvider = SingleBufferConverterInput(buffer)
+        let inputProvider = SingleBufferConverterInput(buffer: buffer)
         let status = converter.convert(to: outBuffer, error: &error) { _, outStatus in
-            inputProvider.next(outStatus)
+            inputProvider.provide(outStatus: outStatus)
         }
 
         guard status != .error,
@@ -266,11 +257,24 @@ final class AudioCapturePipeline: @unchecked Sendable {
         samplesHandler?(samples)
 
         // Hand the converted PCM buffer to the write queue (off the audio thread).
-        if let recordingFile {
+        if let file = recordingFile {
             let bufferCopy = outBuffer
             writeQueue.async {
-                try? recordingFile.write(from: bufferCopy)
+                try? file.write(from: bufferCopy)
             }
+        }
+    }
+
+    private func openRecordingFile(at url: URL) throws -> AVAudioFile {
+        do {
+            return try AVAudioFile(
+                forWriting: url,
+                settings: whisperFormat.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+        } catch {
+            throw AudioCapturePipelineError.recordingUnavailable(error.localizedDescription)
         }
     }
 
@@ -363,22 +367,22 @@ final class AudioCapturePipeline: @unchecked Sendable {
 private final class SingleBufferConverterInput: @unchecked Sendable {
     private let lock = NSLock()
     private let buffer: AVAudioPCMBuffer
-    private var didProvideBuffer = false
+    private var didProvide = false
 
-    init(_ buffer: AVAudioPCMBuffer) {
+    init(buffer: AVAudioPCMBuffer) {
         self.buffer = buffer
     }
 
-    func next(_ outStatus: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+    func provide(outStatus: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
         lock.lock()
         defer { lock.unlock() }
 
-        if didProvideBuffer {
+        guard !didProvide else {
             outStatus.pointee = .noDataNow
             return nil
         }
 
-        didProvideBuffer = true
+        didProvide = true
         outStatus.pointee = .haveData
         return buffer
     }

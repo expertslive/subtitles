@@ -23,11 +23,14 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 - configurable font, size, colors, margins, and two/three-line layout
 - fine-position controls for nudging captions left/right/up/down
 - calm public-caption display modes with draft/stable separation
+- TV-style live roll-up captions with line hold and idle flush controls
+- panic blank and output blank controls for live-event recovery
 - automatic sleep prevention while a subtitle session is running
 - Settings window for setup work away from the live operator screen
 - local pipeline interfaces for ASR and translation engines
 - task-focused capture modes for demo captions, live WhisperKit subtitles, and audio-only recording
 - app-level audio input selector with system-default fallback
+- single audio capture pipeline shared by metering, CAF recording, and WhisperKit
 - WhisperKit/Core ML live ASR engine path
 - glossary term editor with add/edit/delete rows, alias groups, validation, suggestions, and JSON/CSV import/export
 - timestamped session logging with transcripts, SRTs, JSONL segments, and raw input audio

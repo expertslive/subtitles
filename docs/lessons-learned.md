@@ -18,6 +18,8 @@
 - Raw ASR partials are too restless for the public HDMI output. The audience should see stable scheduled caption cues; raw draft text belongs in the operator UI.
 - Calm display is more important than minimum possible latency. A small delay is acceptable if it prevents sentences from changing while visitors are reading.
 - For public output, prefer append-only or scheduled cue behavior: Calm Blocks for conference screens and Live Roll-up for fast speech.
+- TV-style roll-up works better when the app treats each emitted logical line as stable and holds it before scrolling, rather than rewrapping the whole visible paragraph.
+- Panic blank should clear the public output pipeline, not only hide the current text. Unblanking should not resurrect stale captions.
 - In translation mode, translate only stable source phrases. Translating raw partials causes word-order and grammar churn on screen.
 - The first calm-display implementation uses repeated partial prefixes plus a hidden unstable suffix. Future refinement can use WhisperKit word timestamps or confidence if available.
 - Calm Blocks needs an idle-tail flush. If ASR does not send a final segment, publish the remaining held words after the maximum latency so the last spoken sentence does not wait for the next sentence.
@@ -38,14 +40,16 @@
 
 ## Audio And Recording
 
-- The app records `input-audio.caf` using the current AVAudioEngine input format.
+- The app records `input-audio.caf` from the 16 kHz mono Float32 ASR feed.
 - CAF storage dominates session size. Transcript, SRT, JSONL, and glossary files are tiny.
-- For 09:00 to 17:45, reserve about 20 GB per stage per day.
-- A realistic full-day stereo 48 kHz 32-bit float recording is about 12.1 GB.
+- For 09:00 to 17:45, reserve about 5 GB per stage per day for the current recorder.
+- A full-day 16 kHz mono 32-bit float recording is about 2.0 GB.
 - Future Audio/Logs UI should show sample rate, channel count, recording format, MB/hour, and remaining recording time.
 - App-level audio input selection is useful at venues because operators should not have to leave the app to switch between the Mac microphone and a USB audio interface.
 - `System default` should remain a live Core Audio default, not a captured device ID. Pass no explicit device override when the operator chooses system default.
 - If a selected USB interface disappears, fall back to system default and show a clear status rather than blocking Start.
+- Queued CAF writes should capture the open file handle, not look up `recordingFile` later after Stop has set it to nil.
+- Audio capture restarts should preserve the active writer when possible; otherwise a device change can silently stop or truncate the session recording.
 
 ## SwiftUI And macOS Implementation
 

@@ -5,8 +5,8 @@ struct SubtitleOutputView: View {
     @Environment(AppState.self) private var state
     var ignoresSafeArea = true
     var animatesCaptionChanges = true
-    /// When true, this view publishes its measured pixel width back to AppState
-    /// so all output windows use the audience window as the wrapping source.
+    /// When true, this view reports its width back to AppState so the rolling
+    /// line builder can tune line length to the real output surface.
     var governsLayout = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -19,7 +19,21 @@ struct SubtitleOutputView: View {
                     positionedCaptions(availableWidth: geo.size.width)
                 }
             }
+            .onAppear {
+                reportWidthIfNeeded(geo.size.width)
+            }
+            .onChange(of: geo.size.width) { _, width in
+                reportWidthIfNeeded(width)
+            }
         }
+    }
+
+    private func reportWidthIfNeeded(_ width: CGFloat) {
+        guard governsLayout else {
+            return
+        }
+
+        state.applyOutputRenderWidth(width)
     }
 
     @ViewBuilder

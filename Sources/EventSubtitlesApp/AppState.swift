@@ -1494,6 +1494,16 @@ final class AppState {
     }
 
     private func recomputeCaption() {
+        if captionDisplayMode == .liveRollUp {
+            linePacedRoller.updateLayout(
+                targetCharactersPerLine: effectiveTargetCharactersPerLine,
+                maxLines: maxLines
+            )
+            captionLayout = CaptionLayout(lines: linePacedRoller.visibleLines)
+            publicCaptionText = captionLayout.text.replacingOccurrences(of: "\n", with: " ")
+            return
+        }
+
         let composer = CaptionComposer(
             maxLines: maxLines,
             targetCharactersPerLine: targetCharactersPerLine
