@@ -12,6 +12,9 @@ struct GlossaryWorkspace: View {
     @State private var glossaryEditingInput = ""
     @State private var glossaryEditingOutput = ""
     @State private var glossaryBulkEditorExpanded = false
+    @State private var cachedAliasGroups: [GlossaryAliasGroup] = []
+    @State private var cachedValidationIssues: [GlossaryValidationIssue] = []
+    @State private var cachedSuggestions: [GlossarySuggestion] = []
 
     var body: some View {
         GeometryReader { proxy in
@@ -42,6 +45,38 @@ struct GlossaryWorkspace: View {
             }
         }
         .navigationTitle("Glossary")
+        .task(id: state.glossaryText) {
+            let text = state.glossaryText
+            let entries = await Task.detached(priority: .utility) {
+                text
+                    .components(separatedBy: .newlines)
+                    .enumerated()
+                    .compactMap { idx, raw -> GlossaryEntry? in
+                        let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !line.isEmpty, !line.hasPrefix("#") else { return nil }
+                        if let r = line.range(of: "=>") {
+                            let input = String(line[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            let output = String(line[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !input.isEmpty, !output.isEmpty else { return nil }
+                            return GlossaryEntry(lineIndex: idx, input: input, output: output)
+                        }
+                        return GlossaryEntry(lineIndex: idx, input: line, output: line)
+                    }
+            }.value
+            let rawLines = text.components(separatedBy: .newlines)
+            cachedAliasGroups = Self._recomputeAliasGroups(from: entries)
+            cachedValidationIssues = Self._recomputeValidationIssues(rawLines: rawLines, entries: entries)
+        }
+        .task(id: state.history.count) {
+            let glossaryText = state.glossaryText
+            let transcript = (
+                [state.draftEvent?.sourceText, state.currentEvent?.sourceText, state.publicCaptionText].compactMap { $0 }
+                + state.history.flatMap { [$0.sourceText, $0.displayText] }
+            ).joined(separator: " ")
+            cachedSuggestions = await Task.detached(priority: .utility) {
+                Self._recomputeSuggestions(glossaryText: glossaryText, transcriptText: transcript)
+            }.value
+        }
     }
 
     private var glossaryHeader: some View {
@@ -368,123 +403,9 @@ struct GlossaryWorkspace: View {
         }
     }
 
-    private var glossaryAliasGroups: [GlossaryAliasGroup] {
-        Dictionary(grouping: glossaryEntries, by: { normalizedGlossaryKey($0.output) })
-            .compactMap { _, entries in
-                let inputs = Array(Set(entries.map(\.input))).sorted {
-                    $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-                }
-                guard inputs.count > 1, let output = entries.first?.output else {
-                    return nil
-                }
-                return GlossaryAliasGroup(output: output, inputs: inputs)
-            }
-            .sorted { $0.output.localizedCaseInsensitiveCompare($1.output) == .orderedAscending }
-    }
-
-    private var glossaryValidationIssues: [GlossaryValidationIssue] {
-        var issues: [GlossaryValidationIssue] = []
-
-        for (index, rawLine) in glossaryRawLines.enumerated() {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty, !line.hasPrefix("#"), let separator = line.range(of: "=>") else {
-                continue
-            }
-
-            let input = line[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            let output = line[separator.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-            if input.isEmpty || output.isEmpty {
-                issues.append(
-                    GlossaryValidationIssue(
-                        severity: .warning,
-                        message: "Line \(index + 1) has an empty side"
-                    )
-                )
-            }
-        }
-
-        let groupedByInput = Dictionary(grouping: glossaryEntries) {
-            normalizedGlossaryKey($0.input)
-        }
-
-        for (_, entries) in groupedByInput {
-            let outputKeys = Set(entries.map { normalizedGlossaryKey($0.output) })
-            if outputKeys.count > 1, let input = entries.first?.input {
-                let outputs = Array(Set(entries.map(\.output))).sorted {
-                    $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-                }
-                issues.append(
-                    GlossaryValidationIssue(
-                        severity: .warning,
-                        message: "\(input) maps to \(outputs.joined(separator: " / "))"
-                    )
-                )
-                continue
-            }
-
-            let pairKeys = entries.map {
-                "\(normalizedGlossaryKey($0.input))=>\(normalizedGlossaryKey($0.output))"
-            }
-            if Set(pairKeys).count < pairKeys.count, let input = entries.first?.input {
-                issues.append(
-                    GlossaryValidationIssue(
-                        severity: .info,
-                        message: "\(input) appears more than once"
-                    )
-                )
-            }
-        }
-
-        return issues
-    }
-
-    private var glossarySuggestions: [GlossarySuggestion] {
-        let knownTerms = Set(glossaryEntries.flatMap {
-            [normalizedGlossaryKey($0.input), normalizedGlossaryKey($0.output)]
-        })
-        let transcriptText = ([state.draftEvent?.sourceText, state.currentEvent?.sourceText, state.publicCaptionText]
-            .compactMap { $0 } + state.history.flatMap { [$0.sourceText, $0.displayText] })
-            .joined(separator: " ")
-        let tokens = transcriptText
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { token in
-                let key = normalizedGlossaryKey(token)
-                return token.count >= 5 &&
-                    !key.isEmpty &&
-                    !knownTerms.contains(key) &&
-                    !commonGlossarySuggestionWords.contains(key)
-            }
-
-        let examples = Dictionary(tokens.map { (normalizedGlossaryKey($0), $0) }, uniquingKeysWith: { first, _ in first })
-        let frequencies = Dictionary(grouping: tokens, by: normalizedGlossaryKey).mapValues(\.count)
-
-        return frequencies
-            .compactMap { key, count in
-                guard let term = examples[key] else {
-                    return nil
-                }
-                return GlossarySuggestion(term: term, count: count)
-            }
-            .sorted {
-                if $0.count == $1.count {
-                    return $0.term.localizedCaseInsensitiveCompare($1.term) == .orderedAscending
-                }
-                return $0.count > $1.count
-            }
-            .prefix(8)
-            .map { $0 }
-    }
-
-    private var commonGlossarySuggestionWords: Set<String> {
-        [
-            "about", "after", "again", "alleen", "already", "andere", "because", "before",
-            "comes", "could", "daarom", "deze", "doing", "english", "event", "going",
-            "heeft", "hello", "komen", "later", "maybe", "moeten", "onder", "other",
-            "right", "screen", "session", "shown", "staat", "terms", "there", "these",
-            "thing", "think", "through", "vandaag", "wacht", "waarom", "words", "would"
-        ]
-    }
+    private var glossaryAliasGroups: [GlossaryAliasGroup] { cachedAliasGroups }
+    private var glossaryValidationIssues: [GlossaryValidationIssue] { cachedValidationIssues }
+    private var glossarySuggestions: [GlossarySuggestion] { cachedSuggestions }
 
     private var glossaryTestOutput: String {
         GlossaryCorrector(rawGlossary: state.glossaryText).apply(to: glossaryTestInput)
@@ -578,11 +499,102 @@ struct GlossaryWorkspace: View {
         state.saveSettings()
     }
 
-    private func normalizedGlossaryKey(_ value: String) -> String {
+    fileprivate nonisolated static func _normalizedGlossaryKey(_ value: String) -> String {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .lowercased()
+    }
+
+    fileprivate nonisolated static func _recomputeAliasGroups(from entries: [GlossaryEntry]) -> [GlossaryAliasGroup] {
+        Dictionary(grouping: entries, by: { _normalizedGlossaryKey($0.output) })
+            .compactMap { _, entries in
+                let inputs = Array(Set(entries.map(\.input))).sorted {
+                    $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+                }
+                guard inputs.count > 1, let output = entries.first?.output else { return nil }
+                return GlossaryAliasGroup(output: output, inputs: inputs)
+            }
+            .sorted { $0.output.localizedCaseInsensitiveCompare($1.output) == .orderedAscending }
+    }
+
+    fileprivate nonisolated static func _recomputeValidationIssues(
+        rawLines: [String],
+        entries: [GlossaryEntry]
+    ) -> [GlossaryValidationIssue] {
+        var issues: [GlossaryValidationIssue] = []
+        for (index, rawLine) in rawLines.enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, !line.hasPrefix("#"), let separator = line.range(of: "=>") else { continue }
+            let input = line[..<separator.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            let output = line[separator.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if input.isEmpty || output.isEmpty {
+                issues.append(GlossaryValidationIssue(severity: .warning, message: "Line \(index + 1) has an empty side"))
+            }
+        }
+        let groupedByInput = Dictionary(grouping: entries) { _normalizedGlossaryKey($0.input) }
+        for (_, entries) in groupedByInput {
+            let outputKeys = Set(entries.map { _normalizedGlossaryKey($0.output) })
+            if outputKeys.count > 1, let input = entries.first?.input {
+                let outputs = Array(Set(entries.map(\.output))).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                issues.append(GlossaryValidationIssue(severity: .warning, message: "\(input) maps to \(outputs.joined(separator: " / "))"))
+                continue
+            }
+            let pairKeys = entries.map { "\(_normalizedGlossaryKey($0.input))=>\(_normalizedGlossaryKey($0.output))" }
+            if Set(pairKeys).count < pairKeys.count, let input = entries.first?.input {
+                issues.append(GlossaryValidationIssue(severity: .info, message: "\(input) appears more than once"))
+            }
+        }
+        return issues
+    }
+
+    fileprivate nonisolated static func _recomputeSuggestions(
+        glossaryText: String,
+        transcriptText: String
+    ) -> [GlossarySuggestion] {
+        let entries = glossaryText
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line -> (String, String)? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return nil }
+                if let r = trimmed.range(of: "=>") {
+                    return (
+                        String(trimmed[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines),
+                        String(trimmed[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                }
+                return (trimmed, trimmed)
+            }
+        let knownTerms = Set(entries.flatMap { [_normalizedGlossaryKey($0.0), _normalizedGlossaryKey($0.1)] })
+        let stops: Set<String> = [
+            "about","after","again","alleen","already","andere","because","before",
+            "comes","could","daarom","deze","doing","english","event","going",
+            "heeft","hello","komen","later","maybe","moeten","onder","other",
+            "right","screen","session","shown","staat","terms","there","these",
+            "thing","think","through","vandaag","wacht","waarom","words","would"
+        ]
+        let tokens = transcriptText
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { token in
+                let key = _normalizedGlossaryKey(token)
+                return token.count >= 5 && !key.isEmpty && !knownTerms.contains(key) && !stops.contains(key)
+            }
+        let examples = Dictionary(tokens.map { (_normalizedGlossaryKey($0), $0) }, uniquingKeysWith: { f, _ in f })
+        let frequencies = Dictionary(grouping: tokens, by: _normalizedGlossaryKey).mapValues(\.count)
+        return frequencies
+            .compactMap { key, count -> GlossarySuggestion? in
+                guard let term = examples[key] else { return nil }
+                return GlossarySuggestion(term: term, count: count)
+            }
+            .sorted {
+                if $0.count == $1.count {
+                    return $0.term.localizedCaseInsensitiveCompare($1.term) == .orderedAscending
+                }
+                return $0.count > $1.count
+            }
+            .prefix(8)
+            .map { $0 }
     }
 }
 
@@ -591,7 +603,7 @@ private enum GlossaryEditableValue {
     case output
 }
 
-private struct GlossaryEntry: Identifiable {
+private struct GlossaryEntry: Identifiable, Sendable {
     let lineIndex: Int
     let input: String
     let output: String
@@ -599,21 +611,21 @@ private struct GlossaryEntry: Identifiable {
     var id: Int { lineIndex }
 }
 
-private struct GlossaryAliasGroup: Identifiable {
+private struct GlossaryAliasGroup: Identifiable, Sendable {
     let output: String
     let inputs: [String]
 
     var id: String { output }
 }
 
-private struct GlossarySuggestion: Identifiable {
+private struct GlossarySuggestion: Identifiable, Sendable {
     let term: String
     let count: Int
 
     var id: String { term }
 }
 
-private struct GlossaryValidationIssue: Identifiable {
+private struct GlossaryValidationIssue: Identifiable, Sendable {
     let severity: GlossaryValidationSeverity
     let message: String
 
@@ -634,7 +646,7 @@ private struct GlossaryValidationIssue: Identifiable {
     }
 }
 
-private enum GlossaryValidationSeverity {
+private enum GlossaryValidationSeverity: Sendable {
     case warning
     case info
 }
