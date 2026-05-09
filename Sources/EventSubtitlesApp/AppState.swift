@@ -6,7 +6,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
-final class AppState: ObservableObject {
+@Observable
+final class AppState {
     static let chromaKeyGreen = Color(.sRGB, red: 0.0, green: 177.0 / 255.0, blue: 64.0 / 255.0, opacity: 1.0)
 
     static func colorMatches(_ a: Color, _ b: Color, tolerance: CGFloat = 0.01) -> Bool {
@@ -17,87 +18,87 @@ final class AppState: ObservableObject {
             && abs(lhs.blueComponent - rhs.blueComponent) < tolerance
     }
 
-    @Published var mode: ProcessingMode = .subtitlesOnly {
+    var mode: ProcessingMode = .subtitlesOnly {
         didSet {
             if mode != .subtitlesOnly {
                 sourceLanguage = mode.sourceLanguage
             }
         }
     }
-    @Published var sourceLanguage: SourceLanguage = .automatic
+    var sourceLanguage: SourceLanguage = .automatic
 
-    @Published var isRunning = false
-    @Published var audioLevel = 0.0
-    @Published var audioInputDevices: [AudioInputDeviceInfo] = []
-    @Published var selectedAudioInputDeviceID: String?
-    @Published var effectiveAudioInputDeviceID: String?
-    @Published var audioInputDescription = "Input unknown"
-    @Published var audioInputSelectionStatus = "Input unknown"
-    @Published var engineStatus = "Simulator idle"
-    @Published var errorMessage: String?
-    @Published var sessionName = "Main stage"
-    @Published var selectedWorkspace: OperatorWorkspace = .live
-    @Published var transcriptionEngine: TranscriptionEngineChoice = .simulator
-    @Published var whisperModelName = "large-v3-v20240930_626MB"
-    @Published var modelStatus = "Not prepared"
-    @Published var isPreparingModel = false
-    @Published var translationEngine: TranslationEngineChoice = .ruleBased
-    @Published var translationCommandPath = ""
-    @Published var translationCommandArguments = "--from {source} --to {target}"
+    var isRunning = false
+    var audioLevel = 0.0
+    var audioInputDevices: [AudioInputDeviceInfo] = []
+    var selectedAudioInputDeviceID: String?
+    var effectiveAudioInputDeviceID: String?
+    var audioInputDescription = "Input unknown"
+    var audioInputSelectionStatus = "Input unknown"
+    var engineStatus = "Simulator idle"
+    var errorMessage: String?
+    var sessionName = "Main stage"
+    var selectedWorkspace: OperatorWorkspace = .live
+    var transcriptionEngine: TranscriptionEngineChoice = .simulator
+    var whisperModelName = "large-v3-v20240930_626MB"
+    var modelStatus = "Not prepared"
+    var isPreparingModel = false
+    var translationEngine: TranslationEngineChoice = .ruleBased
+    var translationCommandPath = ""
+    var translationCommandArguments = "--from {source} --to {target}"
 
-    @Published var currentEvent: TranscriptEvent?
-    @Published var publicCaptionText = "" {
+    var currentEvent: TranscriptEvent?
+    var publicCaptionText = "" {
         didSet {
             if !publicCaptionText.isEmpty && publicCaptionText != oldValue {
                 lastCaptionActivityAt = Date()
             }
         }
     }
-    @Published var captionLayout = CaptionLayout(lines: []) {
+    var captionLayout = CaptionLayout(lines: []) {
         didSet { recomputeVisibleCaptionLines() }
     }
-    @Published var history: [TranscriptEvent] = []
+    var history: [TranscriptEvent] = []
 
-    @Published var fontName = "Helvetica Neue" {
+    var fontName = "Helvetica Neue" {
         didSet { perCharWidthCache.removeValue(forKey: "\(oldValue)|\(fontSize)"); recomputeVisibleCaptionLines() }
     }
-    @Published var fontSize = 68.0 {
+    var fontSize = 68.0 {
         didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
-    @Published var maxLines = 2 {
+    var maxLines = 2 {
         didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
-    @Published var targetCharactersPerLine = 42 {
+    var targetCharactersPerLine = 42 {
         didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
-    @Published var safeMargin = 78.0 {
+    var safeMargin = 78.0 {
         didSet { recomputeVisibleCaptionLines() }
     }
-    @Published var lineSpacing = 8.0
-    @Published var foregroundColor = Color.white
-    @Published var backgroundColor = AppState.chromaKeyGreen
-    @Published var shadowEnabled = true
-    @Published var shadowRadius = 7.0
-    @Published var captionPosition: CaptionVerticalPosition = .bottom
-    @Published var captionOffsetX = 0.0
-    @Published var captionOffsetY = 0.0
-    @Published var captionDisplayMode: CaptionDisplayMode = .calmBlocks
-    @Published var captionStabilityLevel: CaptionStabilityLevel = .calm
-    @Published var captionCommitDelay = CaptionStabilityLevel.calm.defaultCommitDelay
-    @Published var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
-    @Published var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
-    @Published var captionMaximumLatency = 3.0
-    @Published var captionLineMinHold = 2.0
-    @Published var captionIdleFlushAfter = 1.5
+    var lineSpacing = 8.0
+    var foregroundColor = Color.white
+    var backgroundColor = AppState.chromaKeyGreen
+    var shadowEnabled = true
+    var shadowRadius = 7.0
+    var captionPosition: CaptionVerticalPosition = .bottom
+    var captionOffsetX = 0.0
+    var captionOffsetY = 0.0
+    var captionDisplayMode: CaptionDisplayMode = .calmBlocks
+    var captionStabilityLevel: CaptionStabilityLevel = .calm
+    var captionCommitDelay = CaptionStabilityLevel.calm.defaultCommitDelay
+    var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
+    var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
+    var captionMaximumLatency = 3.0
+    var captionLineMinHold = 2.0
+    var captionIdleFlushAfter = 1.5
     /// Seconds of caption inactivity after which the green output auto-clears.
     /// 0 disables the auto-clear (captions stay on screen until cleared manually
     /// or until the next session begins).
-    @Published var captionAutoClearAfter = 5.0
-    @Published var draftEvent: TranscriptEvent?
-    @Published var stableCaptionQueueText = ""
-    @Published var captionDisplayLatencyText = "0.0s"
+    var captionAutoClearAfter = 5.0
+    var draftEvent: TranscriptEvent?
+    var stableCaptionQueueText = ""
+    var captionDisplayLatencyText = "0.0s"
 
-    @Published var glossaryText = """
+    var glossaryText = """
     kubernetes => Kubernetes
     postgres => PostgreSQL
     postgresql => PostgreSQL
@@ -107,43 +108,43 @@ final class AppState: ObservableObject {
     macbook air => MacBook Air
     """
 
-    @Published var manualCaption = ""
-    @Published var outputBlanked = false
-    @Published var sessionLogStatus = "No active session"
-    @Published var sessionDirectoryPath: String?
-    @Published var sessionSegmentCount = 0
-    @Published var sessionElapsedText = "00:00:00"
-    @Published var keepMacAwakeDuringSession = true
-    @Published var sleepPreventionStatus = "Awake ready"
-    @Published var appMemoryUsageText = "Unknown"
+    var manualCaption = ""
+    var outputBlanked = false
+    var sessionLogStatus = "No active session"
+    var sessionDirectoryPath: String?
+    var sessionSegmentCount = 0
+    var sessionElapsedText = "00:00:00"
+    var keepMacAwakeDuringSession = true
+    var sleepPreventionStatus = "Awake ready"
+    var appMemoryUsageText = "Unknown"
 
-    private let simulatorTranscriber = MockLocalTranscriber()
-    private let whisperKitTranscriber = WhisperKitTranscriber()
-    private let capturePipeline = AudioCapturePipeline()
-    private let translator = RuleBasedTranslator()
-    private let commandLineTranslator = CommandLineTranslator()
-    private let sessionRecorder = SessionRecorder()
-    private let sessionLogger = SessionLogger()
-    private let settingsStore = AppSettingsStore()
-    private var pendingSaveTask: Task<Void, Never>?
-    private let sleepPreventer = SleepPreventer()
-    private var captionStabilityEngine = CaptionStabilityEngine()
-    private var captionDisplayScheduler = CaptionDisplayScheduler()
-    private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
-    private var outputController: OutputWindowController?
-    private var sessionStartedAt: Date?
-    private var lastCaptionSnapshotAt: Date?
-    private var lastCaptionActivityAt: Date?
+    @ObservationIgnored private let simulatorTranscriber = MockLocalTranscriber()
+    @ObservationIgnored private let whisperKitTranscriber = WhisperKitTranscriber()
+    @ObservationIgnored private let capturePipeline = AudioCapturePipeline()
+    @ObservationIgnored private let translator = RuleBasedTranslator()
+    @ObservationIgnored private let commandLineTranslator = CommandLineTranslator()
+    @ObservationIgnored private let sessionRecorder = SessionRecorder()
+    @ObservationIgnored private let sessionLogger = SessionLogger()
+    @ObservationIgnored private let settingsStore = AppSettingsStore()
+    @ObservationIgnored private var pendingSaveTask: Task<Void, Never>?
+    @ObservationIgnored private let sleepPreventer = SleepPreventer()
+    @ObservationIgnored private var captionStabilityEngine = CaptionStabilityEngine()
+    @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
+    @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
+    @ObservationIgnored private var outputController: OutputWindowController?
+    @ObservationIgnored private var sessionStartedAt: Date?
+    @ObservationIgnored private var lastCaptionSnapshotAt: Date?
+    @ObservationIgnored private var lastCaptionActivityAt: Date?
     /// Pixel width of the live output window's render area. Set by SubtitleOutputView
     /// when it has `governsLayout: true`. Drives the `effectiveTargetCharactersPerLine`
     /// calculation so each logical line fits on one visual row at the chosen font.
-    private var outputRenderWidth: CGFloat = 0
-    private var sessionTimer: Timer?
-    private var captionDisplayTimer: DispatchSourceTimer?
-    private var lastDetectedLanguageForDisplay: SourceLanguage?
-    private var lastAudioLevelPublishedAt = Date.distantPast
-    @Published var visibleCaptionLines: [String] = []
-    private var perCharWidthCache: [String: CGFloat] = [:]  // key: "fontName|fontSize"
+    @ObservationIgnored private var outputRenderWidth: CGFloat = 0
+    @ObservationIgnored private var sessionTimer: Timer?
+    @ObservationIgnored private var captionDisplayTimer: DispatchSourceTimer?
+    @ObservationIgnored private var lastDetectedLanguageForDisplay: SourceLanguage?
+    @ObservationIgnored private var lastAudioLevelPublishedAt = Date.distantPast
+    var visibleCaptionLines: [String] = []
+    @ObservationIgnored private var perCharWidthCache: [String: CGFloat] = [:]  // key: "fontName|fontSize"
 
     init() {
         loadSettings()

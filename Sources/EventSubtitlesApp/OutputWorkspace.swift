@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct OutputWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
     @State private var selectedDisplay = 0
     @State private var outputMode: OutputWorkspaceMode = .window
 

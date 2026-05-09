@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct SubtitleOutputView: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
     var ignoresSafeArea = true
     var animatesCaptionChanges = true
     /// Kept for source compatibility with prior versions. The renderer now wraps

@@ -2,7 +2,7 @@ import EventSubtitlesCore
 import SwiftUI
 
 struct StyleWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
     @State private var showSafeArea = true
 
     var body: some View {
@@ -48,7 +48,7 @@ struct StyleWorkspace: View {
                 ZStack {
                     Color.black
                     SubtitleOutputView()
-                        .environmentObject(state)
+                        .environment(state)
                         .aspectRatio(16 / 9, contentMode: .fit)
                         .padding(.vertical, 8)
 

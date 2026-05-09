@@ -3,13 +3,13 @@ import SwiftUI
 
 @main
 struct EventSubtitlesApp: App {
-    @StateObject private var appState = AppState()
+    @State private var appState = AppState()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup("Subtitles") {
             OperatorView()
-                .environmentObject(appState)
+                .environment(appState)
                 .frame(minWidth: 1180, minHeight: 760)
                 .onAppear { appDelegate.state = appState }
         }
@@ -74,7 +74,7 @@ struct EventSubtitlesApp: App {
 
         Settings {
             SettingsView()
-                .environmentObject(appState)
+                .environment(appState)
                 .frame(minWidth: 640, minHeight: 480)
         }
     }

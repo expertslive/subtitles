@@ -235,7 +235,7 @@ struct ToolbarAudioMeter: View {
 }
 
 struct PreviewPanel: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     var title = "Output preview"
     var maxHeight: CGFloat = 430
@@ -247,7 +247,7 @@ struct PreviewPanel: View {
 
             GeometryReader { proxy in
                 SubtitleOutputView(ignoresSafeArea: false, animatesCaptionChanges: false)
-                    .environmentObject(state)
+                    .environment(state)
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
             }
@@ -304,7 +304,7 @@ struct BackgroundSwatch: View {
 }
 
 struct FinePositionControls: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

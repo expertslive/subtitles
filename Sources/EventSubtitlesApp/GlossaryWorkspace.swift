@@ -2,7 +2,7 @@ import EventSubtitlesCore
 import SwiftUI
 
 struct GlossaryWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     @State private var glossarySearch = ""
     @State private var glossaryTestInput = "We deploy kubernetes with postgres and oauth on apple silicon."

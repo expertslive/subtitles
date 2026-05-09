@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct WorkspaceDetail: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
     let workspace: OperatorWorkspace
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

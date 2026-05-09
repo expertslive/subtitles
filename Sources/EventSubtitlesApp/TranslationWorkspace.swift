@@ -2,7 +2,7 @@ import EventSubtitlesCore
 import SwiftUI
 
 struct TranslationWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
     @State private var translationTestInput = "Welcome developers, this conference session is about cloud latency and security."
 
     var body: some View {

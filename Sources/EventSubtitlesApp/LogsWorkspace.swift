@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct LogsWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     private let sessionFileNames = [
         "metadata.json",

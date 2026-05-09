@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct LiveWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     var body: some View {
         GeometryReader { proxy in

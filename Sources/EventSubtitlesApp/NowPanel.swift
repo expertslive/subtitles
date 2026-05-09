@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct NowPanel: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -75,9 +75,10 @@ struct NowPanel: View {
     }
 
     private var manualCaptionCard: some View {
-        NowCard(title: "Manual caption") {
+        @Bindable var bindableState = state
+        return NowCard(title: "Manual caption") {
             HStack {
-                TextField("Send manual caption...", text: $state.manualCaption)
+                TextField("Send manual caption...", text: $bindableState.manualCaption)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit {
                         state.pushManualCaption()
