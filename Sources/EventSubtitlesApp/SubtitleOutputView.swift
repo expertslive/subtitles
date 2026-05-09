@@ -77,9 +77,11 @@ struct SubtitleOutputView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .onAppear { state.applyOutputRenderWidth(availableWidth) }
+        .onAppear {
+            if governsLayout { state.applyOutputRenderWidth(availableWidth) }
+        }
         .onChange(of: availableWidth) { _, newValue in
-            state.applyOutputRenderWidth(newValue)
+            if governsLayout { state.applyOutputRenderWidth(newValue) }
         }
     }
 }
