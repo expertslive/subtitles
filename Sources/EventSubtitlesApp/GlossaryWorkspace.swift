@@ -67,7 +67,7 @@ struct GlossaryWorkspace: View {
             cachedAliasGroups = Self._recomputeAliasGroups(from: entries)
             cachedValidationIssues = Self._recomputeValidationIssues(rawLines: rawLines, entries: entries)
         }
-        .task(id: state.history.count) {
+        .task(id: state.history.first?.id) {
             let glossaryText = state.glossaryText
             let transcript = (
                 [state.draftEvent?.sourceText, state.currentEvent?.sourceText, state.publicCaptionText].compactMap { $0 }
