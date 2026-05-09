@@ -4,12 +4,14 @@ import SwiftUI
 @main
 struct EventSubtitlesApp: App {
     @StateObject private var appState = AppState()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup("Subtitles") {
             OperatorView()
                 .environmentObject(appState)
                 .frame(minWidth: 1180, minHeight: 760)
+                .onAppear { appDelegate.state = appState }
         }
         .commands {
             CommandGroup(replacing: .appInfo) {

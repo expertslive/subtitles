@@ -141,6 +141,8 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
             defer: false
         )
         newWindow.title = "Subtitle Output"
+        newWindow.setFrameAutosaveName("SubtitleOutput")
+        newWindow.isRestorable = true
         newWindow.contentViewController = hostingController
         newWindow.delegate = self
         newWindow.isReleasedWhenClosed = false
