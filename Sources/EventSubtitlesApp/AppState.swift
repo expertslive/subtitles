@@ -119,6 +119,7 @@ final class AppState: ObservableObject {
     private let sessionRecorder = SessionRecorder()
     private let sessionLogger = SessionLogger()
     private let settingsStore = AppSettingsStore()
+    private var pendingSaveTask: Task<Void, Never>?
     private let sleepPreventer = SleepPreventer()
     private var captionStabilityEngine = CaptionStabilityEngine()
     private var captionDisplayScheduler = CaptionDisplayScheduler()
@@ -204,6 +205,7 @@ final class AppState: ObservableObject {
         stopSleepPrevention()
         stopSessionTimer()
         stopSessionLog()
+        flushSettingsImmediately()
         refreshResourceUsage()
     }
 
@@ -444,44 +446,61 @@ final class AppState: ObservableObject {
         saveSettings()
     }
 
-    func saveSettings() {
-        settingsStore.save(
-            AppSettings(
-                mode: mode,
-                sourceLanguage: sourceLanguage,
-                transcriptionEngine: transcriptionEngine.rawValue,
-                translationEngine: translationEngine.rawValue,
-                sessionName: sessionName,
-                whisperModelName: whisperModelName,
-                translationCommandPath: translationCommandPath,
-                translationCommandArguments: translationCommandArguments,
-                glossaryText: glossaryText,
-                fontName: fontName,
-                fontSize: fontSize,
-                maxLines: maxLines,
-                targetCharactersPerLine: targetCharactersPerLine,
-                safeMargin: safeMargin,
-                lineSpacing: lineSpacing,
-                foregroundColor: CodableColor(color: foregroundColor),
-                backgroundColor: CodableColor(color: backgroundColor),
-                shadowEnabled: shadowEnabled,
-                shadowRadius: shadowRadius,
-                captionPosition: captionPosition.rawValue,
-                captionOffsetX: captionOffsetX,
-                captionOffsetY: captionOffsetY,
-                keepMacAwakeDuringSession: keepMacAwakeDuringSession,
-                captionDisplayMode: captionDisplayMode,
-                captionStabilityLevel: captionStabilityLevel,
-                captionCommitDelay: captionCommitDelay,
-                captionUnstableWordCount: captionUnstableWordCount,
-                captionMinimumHold: captionMinimumHold,
-                captionMaximumLatency: captionMaximumLatency,
-                captionLineMinHold: captionLineMinHold,
-                captionIdleFlushAfter: captionIdleFlushAfter,
-                captionAutoClearAfter: captionAutoClearAfter,
-                selectedAudioInputDeviceID: selectedAudioInputDeviceID
-            )
+    /// Writes the current settings to disk synchronously, cancelling any in-flight
+    /// debounce. Call from `stop()` and from app termination to ensure no work is
+    /// lost when the user ends a session or quits.
+    func flushSettingsImmediately() {
+        pendingSaveTask?.cancel()
+        pendingSaveTask = nil
+        settingsStore.save(currentAppSettings())
+    }
+
+    private func currentAppSettings() -> AppSettings {
+        AppSettings(
+            mode: mode,
+            sourceLanguage: sourceLanguage,
+            transcriptionEngine: transcriptionEngine.rawValue,
+            translationEngine: translationEngine.rawValue,
+            sessionName: sessionName,
+            whisperModelName: whisperModelName,
+            translationCommandPath: translationCommandPath,
+            translationCommandArguments: translationCommandArguments,
+            glossaryText: glossaryText,
+            fontName: fontName,
+            fontSize: fontSize,
+            maxLines: maxLines,
+            targetCharactersPerLine: targetCharactersPerLine,
+            safeMargin: safeMargin,
+            lineSpacing: lineSpacing,
+            foregroundColor: CodableColor(color: foregroundColor),
+            backgroundColor: CodableColor(color: backgroundColor),
+            shadowEnabled: shadowEnabled,
+            shadowRadius: shadowRadius,
+            captionPosition: captionPosition.rawValue,
+            captionOffsetX: captionOffsetX,
+            captionOffsetY: captionOffsetY,
+            keepMacAwakeDuringSession: keepMacAwakeDuringSession,
+            captionDisplayMode: captionDisplayMode,
+            captionStabilityLevel: captionStabilityLevel,
+            captionCommitDelay: captionCommitDelay,
+            captionUnstableWordCount: captionUnstableWordCount,
+            captionMinimumHold: captionMinimumHold,
+            captionMaximumLatency: captionMaximumLatency,
+            captionLineMinHold: captionLineMinHold,
+            captionIdleFlushAfter: captionIdleFlushAfter,
+            captionAutoClearAfter: captionAutoClearAfter,
+            selectedAudioInputDeviceID: selectedAudioInputDeviceID
         )
+    }
+
+    func saveSettings() {
+        pendingSaveTask?.cancel()
+        pendingSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            self.settingsStore.save(self.currentAppSettings())
+            self.pendingSaveTask = nil
+        }
     }
 
     func importGlossary() {
