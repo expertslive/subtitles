@@ -115,6 +115,26 @@ func testSRTAppendingMatchesFullFormat() -> Bool {
     )
 }
 
+private func testCaptionTickSchedulerComputesNearestDeadline() -> Bool {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    let soonest = now.addingTimeInterval(0.8)
+    let deadlines: [Date?] = [
+        soonest,                        // queued cue due in 0.8s
+        now.addingTimeInterval(1.5),    // line-min-hold expiry in 1.5s
+        nil,                            // idle-flush not pending
+        now.addingTimeInterval(5.0)     // auto-clear in 5s
+    ]
+    let nearest = CaptionTickScheduler.nearestDeadline(from: deadlines, fallback: now.addingTimeInterval(60))
+    return expectEqual(nearest, soonest, "nearest deadline picks smallest non-nil")
+}
+
+private func testCaptionTickSchedulerUsesFallbackWhenAllNil() -> Bool {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    let fallback = now.addingTimeInterval(60)
+    let nearest = CaptionTickScheduler.nearestDeadline(from: [nil, nil, nil], fallback: fallback)
+    return expectEqual(nearest, fallback, "all-nil deadlines fall back to provided default")
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -122,7 +142,9 @@ let tests = [
     ("promptBuilderIncludesSessionAndGlossaryTerms", testPromptBuilderIncludesSessionAndGlossaryTerms),
     ("promptBuilderDropsEmptyParts", testPromptBuilderDropsEmptyParts),
     ("promptBuilderTruncatesAtCharacterLimit", testPromptBuilderTruncatesAtCharacterLimit),
-    ("srtAppendingMatchesFullFormat", testSRTAppendingMatchesFullFormat)
+    ("srtAppendingMatchesFullFormat", testSRTAppendingMatchesFullFormat),
+    ("captionTickSchedulerComputesNearestDeadline", testCaptionTickSchedulerComputesNearestDeadline),
+    ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil)
 ]
 
 var failed = 0

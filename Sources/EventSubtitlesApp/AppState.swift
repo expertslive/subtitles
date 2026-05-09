@@ -133,7 +133,7 @@ final class AppState: ObservableObject {
     /// calculation so each logical line fits on one visual row at the chosen font.
     private var outputRenderWidth: CGFloat = 0
     private var sessionTimer: Timer?
-    private var captionDisplayTimer: Timer?
+    private var captionDisplayTimer: DispatchSourceTimer?
     private var lastDetectedLanguageForDisplay: SourceLanguage?
     private var lastAudioLevelPublishedAt = Date.distantPast
 
@@ -930,16 +930,56 @@ final class AppState: ObservableObject {
     }
 
     private func startCaptionDisplayTimer() {
-        captionDisplayTimer?.invalidate()
-        captionDisplayTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+        stopCaptionDisplayTimer()
+        scheduleNextCaptionTick()
+    }
+
+    private func scheduleNextCaptionTick() {
+        captionDisplayTimer?.cancel()
+        let now = Date()
+        let deadline = nextCaptionDeadline(now: now)
+        let delay = max(0.05, deadline.timeIntervalSince(now))
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + delay, leeway: .milliseconds(20))
+        timer.setEventHandler { [weak self] in
             Task { @MainActor [weak self] in
-                await self?.tickCaptionDisplayPipeline()
+                guard let self else { return }
+                await self.tickCaptionDisplayPipeline()
+                if self.isRunning {
+                    self.scheduleNextCaptionTick()
+                }
             }
         }
+        timer.resume()
+        captionDisplayTimer = timer
+    }
+
+    /// Computes the next time the caption pipeline should wake up. Looks at
+    /// auto-clear and idle-flush deadlines. Falls back to 1 second if nothing
+    /// is pending — that's the demand-driven equivalent of the old 5 Hz poll
+    /// but at 1 Hz instead.
+    private func nextCaptionDeadline(now: Date) -> Date {
+        var deadlines: [Date?] = []
+
+        // Auto-clear deadline
+        if captionAutoClearAfter > 0, !publicCaptionText.isEmpty, let last = lastCaptionActivityAt {
+            deadlines.append(last.addingTimeInterval(captionAutoClearAfter))
+        }
+
+        // Idle-flush deadline (only meaningful when not in fastDraft and pending snapshot exists)
+        if captionDisplayMode != .fastDraft, mode == .subtitlesOnly, let snap = lastCaptionSnapshotAt {
+            deadlines.append(snap.addingTimeInterval(captionMaximumLatency))
+        }
+
+        return CaptionTickScheduler.nearestDeadline(
+            from: deadlines,
+            fallback: now.addingTimeInterval(1.0)
+        )
     }
 
     private func stopCaptionDisplayTimer() {
-        captionDisplayTimer?.invalidate()
+        captionDisplayTimer?.cancel()
         captionDisplayTimer = nil
     }
 
@@ -1129,6 +1169,8 @@ final class AppState: ObservableObject {
         if isFinal {
             lastCaptionSnapshotAt = nil
         }
+
+        if isRunning { scheduleNextCaptionTick() }
     }
 
     private func publishFastDraft(
@@ -1156,6 +1198,8 @@ final class AppState: ObservableObject {
         if isFinal {
             recordDisplayedEvent(event, detectedLanguage: detectedLanguage)
         }
+
+        if isRunning { scheduleNextCaptionTick() }
     }
 
     private func publishNextCaptionCue(force: Bool = false) {
@@ -1195,6 +1239,7 @@ final class AppState: ObservableObject {
 
         recordDisplayedEvent(event, detectedLanguage: lastDetectedLanguageForDisplay)
         updateCaptionSchedulerStatus()
+        if isRunning { scheduleNextCaptionTick() }
     }
 
     private func refreshLinePacedOutput(
