@@ -1,30 +1,28 @@
 import SwiftUI
 
 struct WorkspaceDetail: View {
+    @EnvironmentObject private var state: AppState
     let workspace: OperatorWorkspace
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
-        Group {
-            switch workspace {
-            case .live:
-                LiveWorkspace()
-            case .style:
-                StyleWorkspace()
-            case .glossary:
-                GlossaryWorkspace()
-            case .translation:
-                TranslationWorkspace()
-            case .audio:
-                AudioWorkspace()
-            case .models:
-                ModelsWorkspace()
-            case .output:
-                OutputWorkspace()
-            case .logs:
-                LogsWorkspace()
-            }
+        TabView(selection: Binding(
+            get: { workspace },
+            set: { state.selectedWorkspace = $0 }
+        )) {
+            LiveWorkspace().tag(OperatorWorkspace.live)
+            StyleWorkspace().tag(OperatorWorkspace.style)
+            GlossaryWorkspace().tag(OperatorWorkspace.glossary)
+            TranslationWorkspace().tag(OperatorWorkspace.translation)
+            AudioWorkspace().tag(OperatorWorkspace.audio)
+            ModelsWorkspace().tag(OperatorWorkspace.models)
+            OutputWorkspace().tag(OperatorWorkspace.output)
+            LogsWorkspace().tag(OperatorWorkspace.logs)
         }
+        .tabViewStyle(.automatic)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+        .animation(reduceMotion ? nil : .snappy(duration: 0.15), value: workspace)
     }
 }
