@@ -44,7 +44,6 @@ struct GlossaryWorkspace: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .navigationTitle("Glossary")
         .task(id: state.glossaryText) {
             let text = state.glossaryText
             let entries = await Task.detached(priority: .utility) {

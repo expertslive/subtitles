@@ -23,6 +23,7 @@ struct WorkspaceDetail: View {
         .tabViewStyle(.automatic)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(workspace.title)
         .animation(reduceMotion ? nil : .snappy(duration: 0.15), value: workspace)
     }
 }

@@ -75,7 +75,6 @@ struct AudioWorkspace: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .navigationTitle("Audio")
     }
 
     private var audioInputPicker: some View {

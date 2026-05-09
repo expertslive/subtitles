@@ -43,7 +43,6 @@ struct LiveWorkspace: View {
                 }
             }
         }
-        .navigationTitle("Live")
     }
 
     private var currentTranscript: some View {

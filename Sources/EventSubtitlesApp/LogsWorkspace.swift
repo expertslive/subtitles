@@ -72,7 +72,6 @@ struct LogsWorkspace: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .navigationTitle("Logs")
     }
 
     private var logFileList: some View {

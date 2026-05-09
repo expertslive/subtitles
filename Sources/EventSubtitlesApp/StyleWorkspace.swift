@@ -27,7 +27,6 @@ struct StyleWorkspace: View {
                 .padding(18)
             }
         }
-        .navigationTitle("Style")
     }
 
     private var previewBand: some View {

@@ -21,7 +21,6 @@ struct TranslationWorkspace: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .navigationTitle("Translation")
     }
 
     private var translationControls: some View {

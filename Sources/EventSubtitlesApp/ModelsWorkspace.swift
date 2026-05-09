@@ -29,7 +29,6 @@ struct ModelsWorkspace: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .navigationTitle("Models")
     }
 
     private var modelSideColumn: some View {

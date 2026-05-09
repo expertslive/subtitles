@@ -32,7 +32,6 @@ struct OutputWorkspace: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .navigationTitle("Output")
     }
 
     private var outputSetupColumn: some View {
