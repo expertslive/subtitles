@@ -9,7 +9,6 @@ struct EventSubtitlesApp: App {
         WindowGroup("Subtitles") {
             OperatorView()
                 .environmentObject(appState)
-                .preferredColorScheme(.dark)
                 .frame(minWidth: 1180, minHeight: 760)
         }
         .commands {
@@ -70,6 +69,12 @@ struct EventSubtitlesApp: App {
                 }
             }
         }
+
+        Settings {
+            SettingsView()
+                .environmentObject(appState)
+                .frame(minWidth: 640, minHeight: 480)
+        }
     }
 
     private func showAboutPanel() {
@@ -94,5 +99,24 @@ struct EventSubtitlesApp: App {
             .version: "Build \(build)",
             .credits: credits
         ])
+    }
+}
+
+private struct SettingsView: View {
+    var body: some View {
+        TabView {
+            StyleWorkspace()
+                .tabItem { Label("Style", systemImage: "textformat") }
+
+            AudioWorkspace()
+                .tabItem { Label("Audio", systemImage: "waveform") }
+
+            ModelsWorkspace()
+                .tabItem { Label("Models", systemImage: "cpu") }
+
+            TranslationWorkspace()
+                .tabItem { Label("Translation", systemImage: "arrow.left.arrow.right") }
+        }
+        .padding(12)
     }
 }
