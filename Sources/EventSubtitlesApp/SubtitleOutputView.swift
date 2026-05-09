@@ -8,6 +8,7 @@ struct SubtitleOutputView: View {
     /// Kept for source compatibility with prior versions. The renderer now wraps
     /// per-instance using the view's own pixel width, so this flag has no effect.
     var governsLayout = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -46,10 +47,15 @@ struct SubtitleOutputView: View {
         .padding(.horizontal, state.safeMargin)
         .padding(.vertical, state.safeMargin)
         .offset(x: state.captionOffsetX, y: state.captionOffsetY)
-        .animation(animatesCaptionChanges ? .easeOut(duration: 0.18) : nil, value: state.captionLayout.text)
-        .animation(animatesCaptionChanges ? .easeOut(duration: 0.18) : nil, value: state.captionPosition.rawValue)
-        .animation(animatesCaptionChanges ? .easeOut(duration: 0.12) : nil, value: state.captionOffsetX)
-        .animation(animatesCaptionChanges ? .easeOut(duration: 0.12) : nil, value: state.captionOffsetY)
+        .animation(
+            (animatesCaptionChanges && !reduceMotion) ? .smooth(duration: 0.18) : nil,
+            value: CaptionAnimationKey(
+                text: state.captionLayout.text,
+                position: state.captionPosition.rawValue,
+                offsetX: state.captionOffsetX,
+                offsetY: state.captionOffsetY
+            )
+        )
     }
 
     private func captionLines(availableWidth: CGFloat) -> some View {
@@ -149,4 +155,11 @@ struct SubtitleOutputView: View {
         }
         return lines
     }
+}
+
+private struct CaptionAnimationKey: Equatable {
+    let text: String
+    let position: String
+    let offsetX: Double
+    let offsetY: Double
 }
