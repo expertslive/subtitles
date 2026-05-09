@@ -33,7 +33,10 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
             createWindow()
         }
         if isFilled {
+            // Coming back from filled mode: also re-center, otherwise the window
+            // would stay at the external-display-sized frame from fillExternalDisplay.
             resetWindowedState()
+            centerOnMainScreen()
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
