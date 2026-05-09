@@ -81,8 +81,8 @@ struct EventSubtitlesApp: App {
 
     private func showAboutPanel() {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "3.1.0"
-        let build = info?["CFBundleVersion"] as? String ?? "6"
+        let version = info?["CFBundleShortVersionString"] as? String ?? "3.3.0"
+        let build = info?["CFBundleVersion"] as? String ?? "8"
         let credits = NSAttributedString(
             string: """
             Offline live subtitles and Dutch/English translation for events.

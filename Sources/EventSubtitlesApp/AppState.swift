@@ -218,7 +218,11 @@ final class AppState {
         isRunning = false
         isStarting = false
         engineStatus = transcriptionEngine.idleStatusLabel
-        publishNextCaptionCue(force: true)
+        if captionDisplayMode == .liveRollUp {
+            flushLinePacedOutput(now: Date())
+        } else {
+            publishNextCaptionCue(force: true)
+        }
         stopCaptionDisplayTimer()
         stopSleepPrevention()
         stopSessionTimer()
@@ -348,7 +352,7 @@ final class AppState {
             do {
                 try await self.capturePipeline.restart(
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
-                    recordingURL: nil // do NOT rotate the CAF mid-session; keep recording disabled on restart
+                    recordingURL: nil // Keep the active CAF writer instead of rotating files mid-session.
                 )
                 self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
                 if priorDescription != self.audioInputDescription {
@@ -1313,6 +1317,34 @@ final class AppState {
 
         updateCaptionSchedulerStatus()
         _ = changed // explicit no-op so the compiler doesn't complain about the unused return
+    }
+
+    private func flushLinePacedOutput(now: Date) {
+        linePacedRoller.updateLayout(
+            targetCharactersPerLine: effectiveTargetCharactersPerLine,
+            maxLines: maxLines
+        )
+        _ = linePacedRoller.tick(
+            now: now,
+            lineMinHold: 0,
+            idleFlushAfter: 0
+        )
+
+        let emittedLines = linePacedRoller.drainEmittedLines()
+        for line in emittedLines {
+            let event = TranscriptEvent(
+                sourceText: line,
+                displayText: line,
+                isFinal: true,
+                createdAt: now
+            )
+            recordDisplayedEvent(event, detectedLanguage: lastDetectedLanguageForDisplay)
+        }
+
+        let lines = linePacedRoller.visibleLines
+        publicCaptionText = lines.joined(separator: " ")
+        captionLayout = CaptionLayout(lines: lines)
+        updateCaptionSchedulerStatus()
     }
 
     private func tickCaptionDisplayPipeline() async {

@@ -40,7 +40,6 @@ Still future work:
 - Richer glossary metadata.
 - Browsing previous session folders.
 - Regenerating SRT files from the Logs workspace.
-- Audio input selection from inside the app.
 - Display selection and output test cards.
 - Audio storage estimator in Audio or Logs.
 - More advanced calm-caption heuristics using word timestamps or confidence if WhisperKit exposes enough data.
@@ -350,3 +349,7 @@ The first implementation can be layout-only, moving the existing controls into t
 Implemented v3.0.0 redesign: NavigationSplitView sidebar, toolbar with global controls, Now panel, preview-first Style workspace, row-based Glossary workspace, and stable Calm Blocks public output with idle-tail flush.
 
 Implemented v3.1.0 audio input selection: the Audio workspace can choose `System default` or a specific input interface, and the selected input is shared by metering, CAF recording, and WhisperKit capture.
+
+Implemented v3.2.0 live-event hardening: a shared audio capture pipeline, TV-style Live Roll-up captions, panic blank, output-window lockdown, and Stop-time rolling-caption flush.
+
+Implemented v3.3.0 performance and lifecycle pass: Swift Observation state, demand-driven caption ticks, preserved workspace state across switches, Settings scene, output-window frame restoration, safe live-session quit handling, and smoother meter/caption animations.

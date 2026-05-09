@@ -9,7 +9,7 @@ EventSubtitles is a native macOS app for offline live subtitles and Dutch/Englis
 - [Workspace tabs](workspace-tabs.md): implemented workspace layout and future notes for Live, Style, Glossary, Logs, Models, Translation, Audio, and Output.
 - [Lessons learned](lessons-learned.md): implementation decisions, operator UX findings, storage estimates, and known follow-ups.
 - [Release process](release-process.md): validation, publishing, and single-current-release policy.
-- [Release v3.1.0](releases/v3.1.0.md): latest packaged macOS app download notes.
+- [Release v3.3.0](releases/v3.3.0.md): latest packaged macOS app download notes.
 - [Original project prompt](../initial_prompt.txt): initial product goals and constraints.
 
 ## Build And Run

@@ -5,8 +5,8 @@ struct SubtitleOutputView: View {
     @Environment(AppState.self) private var state
     var ignoresSafeArea = true
     var animatesCaptionChanges = true
-    /// Kept for source compatibility with prior versions. The renderer now wraps
-    /// per-instance using the view's own pixel width, so this flag has no effect.
+    /// When true, this view publishes its measured pixel width back to AppState
+    /// so all output windows use the audience window as the wrapping source.
     var governsLayout = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

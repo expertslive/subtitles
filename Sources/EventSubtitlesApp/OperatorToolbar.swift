@@ -100,7 +100,13 @@ extension OperatorView {
                     title: state.outputBlanked ? "Unblank output" : "Panic blank",
                     systemImage: state.outputBlanked ? "eye" : "eye.slash.fill",
                     tint: state.outputBlanked ? .gray : .orange,
-                    action: state.toggleOutputBlank
+                    action: {
+                        if state.outputBlanked {
+                            state.unblankOutput()
+                        } else {
+                            state.panicBlank()
+                        }
+                    }
                 )
                 .keyboardShortcut("b", modifiers: [.command, .shift])
 
