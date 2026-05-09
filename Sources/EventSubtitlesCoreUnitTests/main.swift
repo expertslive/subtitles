@@ -155,6 +155,52 @@ private func testCaptionLineFitterIncludesOversizedSingleLine() -> Bool {
     return expectEqual(picked, ["huge wraps to four"], "oversized newest line included alone")
 }
 
+private func readSource(_ relativePath: String) -> String? {
+    let sourceURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent(relativePath)
+    return try? String(contentsOf: sourceURL, encoding: .utf8)
+}
+
+private func testAppStateStartOnlyRunsSessionAfterCaptureSucceeds() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
+        fputs("FAIL: AppState source should be readable\n", stderr)
+        return false
+    }
+
+    guard let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let runningSet = source.range(of: "self.isRunning = true"),
+          let transcriptionStart = source.range(of: "self.startTranscriptionEngine()")
+    else {
+        fputs("FAIL: AppState start lifecycle markers should exist\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        captureStart.lowerBound < runningSet.lowerBound && runningSet.lowerBound < transcriptionStart.lowerBound,
+        true,
+        "AppState should mark running and start transcription only after capture succeeds"
+    ) && expectEqual(
+        source.contains("self.handleCaptureStartFailure(error)"),
+        true,
+        "capture start failure should roll back session side effects"
+    )
+}
+
+private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppDelegate.swift") else {
+        fputs("FAIL: AppDelegate source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains(".terminateLater") &&
+            source.contains("await state.stop()") &&
+            source.contains("sender.reply(toApplicationShouldTerminate: true)"),
+        true,
+        "confirmed quit should await session stop before replying to terminate"
+    )
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -166,7 +212,9 @@ let tests = [
     ("captionTickSchedulerComputesNearestDeadline", testCaptionTickSchedulerComputesNearestDeadline),
     ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil),
     ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
-    ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine)
+    ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
+    ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
+    ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop)
 ]
 
 var failed = 0

@@ -25,13 +25,13 @@ struct EventSubtitlesApp: App {
                     appState.start()
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(appState.isRunning)
+                .disabled(appState.isRunning || appState.isStarting)
 
                 Button("Stop") {
                     Task { await appState.stop() }
                 }
                 .keyboardShortcut(".", modifiers: .command)
-                .disabled(!appState.isRunning)
+                .disabled(!appState.isRunning && !appState.isStarting)
 
                 Divider()
 

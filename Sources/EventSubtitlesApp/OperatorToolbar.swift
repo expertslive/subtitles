@@ -24,7 +24,7 @@ extension OperatorView {
                         }
                     ),
                     width: 128,
-                    isDisabled: state.isRunning
+                    isDisabled: state.isRunning || state.isStarting
                 ) {
                     ForEach(TranscriptionEngineChoice.allCases) { engine in
                         Text(engine.label).tag(engine)
@@ -73,7 +73,7 @@ extension OperatorView {
 
         ToolbarItem(placement: .confirmationAction) {
             HStack(spacing: 10) {
-                if state.isRunning {
+                if state.isRunning || state.isStarting {
                     ToolbarRoundButton(
                         title: "Stop",
                         systemImage: "stop.fill",

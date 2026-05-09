@@ -17,7 +17,7 @@ struct AudioWorkspace: View {
                             Label("Use system default", systemImage: "mic")
                                 .frame(maxWidth: .infinity)
                         }
-                        .disabled(state.selectedAudioInputDeviceID == nil || state.isRunning)
+                        .disabled(state.selectedAudioInputDeviceID == nil || state.isRunning || state.isStarting)
                     }
                     .frame(width: 360)
 
@@ -104,7 +104,7 @@ struct AudioWorkspace: View {
                 }
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
-                .disabled(state.isRunning)
+                .disabled(state.isRunning || state.isStarting)
 
                 Button {
                     state.refreshAudioInputDevice()

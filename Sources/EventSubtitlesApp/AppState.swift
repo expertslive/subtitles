@@ -28,6 +28,7 @@ final class AppState {
     var sourceLanguage: SourceLanguage = .automatic
 
     var isRunning = false
+    var isStarting = false
     var audioLevel = 0.0
     var audioInputDevices: [AudioInputDeviceInfo] = []
     var selectedAudioInputDeviceID: String?
@@ -154,19 +155,16 @@ final class AppState {
     }
 
     func start() {
-        guard !isRunning else {
+        guard !isRunning, !isStarting else {
             return
         }
 
-        isRunning = true
+        isStarting = true
         errorMessage = nil
         saveSettings()
-        engineStatus = transcriptionEngine.statusLabel
+        engineStatus = "Starting capture"
         resetCaptionDisplayPipeline(clearOutput: true)
-        startSleepPreventionIfNeeded()
         startSessionLog()
-        startSessionTimer()
-        startCaptionDisplayTimer()
         refreshResourceUsage()
 
         Task { @MainActor [weak self] in
@@ -191,23 +189,34 @@ final class AppState {
                         }
                     }
                 )
+                guard self.isStarting else {
+                    self.capturePipeline.stop()
+                    return
+                }
+                self.isRunning = true
+                self.isStarting = false
+                self.engineStatus = self.transcriptionEngine.statusLabel
+                self.startSleepPreventionIfNeeded()
+                self.startSessionTimer()
+                self.startCaptionDisplayTimer()
+                self.refreshResourceUsage()
+                self.startTranscriptionEngine()
             } catch {
                 self.sessionLogger.error("Audio capture start failed: \(error.localizedDescription)")
-                self.errorMessage = "Audio capture unavailable: \(error.localizedDescription)"
+                self.handleCaptureStartFailure(error)
             }
         }
-
-        startTranscriptionEngine()
     }
 
     func stop() async {
-        guard isRunning else { return }
+        guard isRunning || isStarting else { return }
 
         simulatorTranscriber.stopNow()
         await whisperKitTranscriber.stop()
         capturePipeline.stop()
         audioLevel = 0
         isRunning = false
+        isStarting = false
         engineStatus = transcriptionEngine.idleStatusLabel
         publishNextCaptionCue(force: true)
         stopCaptionDisplayTimer()
@@ -215,6 +224,21 @@ final class AppState {
         stopSessionTimer()
         stopSessionLog()
         flushSettingsImmediately()
+        refreshResourceUsage()
+    }
+
+    private func handleCaptureStartFailure(_ error: Error) {
+        capturePipeline.stop()
+        audioLevel = 0
+        isRunning = false
+        isStarting = false
+        engineStatus = transcriptionEngine.idleStatusLabel
+        stopCaptionDisplayTimer()
+        stopSleepPrevention()
+        stopSessionTimer()
+        stopSessionLog()
+        sessionLogStatus = "Start failed"
+        errorMessage = "Audio capture unavailable: \(error.localizedDescription)"
         refreshResourceUsage()
     }
 
