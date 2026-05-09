@@ -135,6 +135,26 @@ private func testCaptionTickSchedulerUsesFallbackWhenAllNil() -> Bool {
     return expectEqual(nearest, fallback, "all-nil deadlines fall back to provided default")
 }
 
+private func testCaptionLineFitterPicksNewestThatFit() -> Bool {
+    let candidates = ["A", "B", "C", "D", "E"]
+    // Each line takes 1 visual line; budget is 2.
+    let picked = CaptionLineFitter.pickVisibleLogicalLines(
+        candidates: candidates,
+        maxVisualLines: 2,
+        measureVisualLineCount: { _ in 1 }
+    )
+    return expectEqual(picked, ["D", "E"], "picks newest two when each is one visual line")
+}
+
+private func testCaptionLineFitterIncludesOversizedSingleLine() -> Bool {
+    let picked = CaptionLineFitter.pickVisibleLogicalLines(
+        candidates: ["short", "huge wraps to four"],
+        maxVisualLines: 2,
+        measureVisualLineCount: { $0 == "huge wraps to four" ? 4 : 1 }
+    )
+    return expectEqual(picked, ["huge wraps to four"], "oversized newest line included alone")
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -144,7 +164,9 @@ let tests = [
     ("promptBuilderTruncatesAtCharacterLimit", testPromptBuilderTruncatesAtCharacterLimit),
     ("srtAppendingMatchesFullFormat", testSRTAppendingMatchesFullFormat),
     ("captionTickSchedulerComputesNearestDeadline", testCaptionTickSchedulerComputesNearestDeadline),
-    ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil)
+    ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil),
+    ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
+    ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine)
 ]
 
 var failed = 0

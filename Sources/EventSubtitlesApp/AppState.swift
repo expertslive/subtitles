@@ -53,20 +53,26 @@ final class AppState: ObservableObject {
             }
         }
     }
-    @Published var captionLayout = CaptionLayout(lines: [])
+    @Published var captionLayout = CaptionLayout(lines: []) {
+        didSet { recomputeVisibleCaptionLines() }
+    }
     @Published var history: [TranscriptEvent] = []
 
-    @Published var fontName = "Helvetica Neue"
+    @Published var fontName = "Helvetica Neue" {
+        didSet { perCharWidthCache.removeValue(forKey: "\(oldValue)|\(fontSize)"); recomputeVisibleCaptionLines() }
+    }
     @Published var fontSize = 68.0 {
-        didSet { recomputeCaption() }
+        didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
     @Published var maxLines = 2 {
-        didSet { recomputeCaption() }
+        didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
     @Published var targetCharactersPerLine = 42 {
-        didSet { recomputeCaption() }
+        didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
-    @Published var safeMargin = 78.0
+    @Published var safeMargin = 78.0 {
+        didSet { recomputeVisibleCaptionLines() }
+    }
     @Published var lineSpacing = 8.0
     @Published var foregroundColor = Color.white
     @Published var backgroundColor = AppState.chromaKeyGreen
@@ -136,6 +142,8 @@ final class AppState: ObservableObject {
     private var captionDisplayTimer: DispatchSourceTimer?
     private var lastDetectedLanguageForDisplay: SourceLanguage?
     private var lastAudioLevelPublishedAt = Date.distantPast
+    @Published var visibleCaptionLines: [String] = []
+    private var perCharWidthCache: [String: CGFloat] = [:]  // key: "fontName|fontSize"
 
     init() {
         loadSettings()
@@ -373,6 +381,7 @@ final class AppState: ObservableObject {
         let clamped = max(0, width)
         if abs(clamped - outputRenderWidth) > 1 {
             outputRenderWidth = clamped
+            recomputeVisibleCaptionLines()
         }
     }
 
@@ -1436,6 +1445,61 @@ final class AppState: ObservableObject {
             targetCharactersPerLine: targetCharactersPerLine
         )
         captionLayout = composer.compose(publicCaptionText)
+    }
+
+    /// Recomputes the visible logical lines for the audience-facing output. Called
+    /// whenever captionLayout, fontName, fontSize, maxLines, safeMargin, or
+    /// outputRenderWidth changes. Caches per-character widths per (fontName, fontSize)
+    /// so the per-word NSAttributedString measurement runs at most once per font.
+    func recomputeVisibleCaptionLines() {
+        let candidates = captionLayout.lines
+        guard !candidates.isEmpty, maxLines > 0 else {
+            if !visibleCaptionLines.isEmpty { visibleCaptionLines = [] }
+            return
+        }
+
+        let availableWidth = max(100, outputRenderWidth - 2 * safeMargin)
+        let cacheKey = "\(fontName)|\(fontSize)"
+        let perChar: CGFloat
+        if let cached = perCharWidthCache[cacheKey] {
+            perChar = cached
+        } else {
+            let baseFont = NSFont(name: fontName, size: CGFloat(fontSize))
+                ?? NSFont.systemFont(ofSize: CGFloat(fontSize))
+            let descriptor = baseFont.fontDescriptor.withSymbolicTraits(.bold)
+            let font = NSFont(descriptor: descriptor, size: CGFloat(fontSize)) ?? baseFont
+            let sample = "Mwoenarsl" as NSString
+            let sampleWidth = sample.size(withAttributes: [.font: font]).width
+            perChar = sampleWidth / CGFloat(sample.length)
+            perCharWidthCache[cacheKey] = perChar
+        }
+        guard perChar > 0 else { return }
+
+        let measure: (String) -> Int = { line in
+            let words = line.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard !words.isEmpty else { return 0 }
+            var lines = 1
+            var currentWidth: CGFloat = 0
+            for word in words {
+                let wordWidth = CGFloat(word.count + 1) * perChar
+                if currentWidth + wordWidth <= availableWidth || currentWidth == 0 {
+                    currentWidth += wordWidth
+                } else {
+                    lines += 1
+                    currentWidth = wordWidth
+                }
+            }
+            return lines
+        }
+
+        let picked = CaptionLineFitter.pickVisibleLogicalLines(
+            candidates: candidates,
+            maxVisualLines: maxLines,
+            measureVisualLineCount: measure
+        )
+        if picked != visibleCaptionLines {
+            visibleCaptionLines = picked
+        }
     }
 }
 
