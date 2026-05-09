@@ -349,10 +349,7 @@ final class AppState: ObservableObject {
 
     private func publishAudioLevel(_ level: Double) {
         let now = Date()
-        guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 15.0 || level > 0.92 else {
-            return
-        }
-
+        guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 60.0 else { return }
         lastAudioLevelPublishedAt = now
         audioLevel = level
     }
