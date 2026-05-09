@@ -255,7 +255,6 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         streamStartedAt?.addingTimeInterval(TimeInterval(streamSeconds))
     }
 }
-
 enum WhisperKitTranscriberError: LocalizedError {
     case tokenizerUnavailable
 
@@ -266,4 +265,3 @@ enum WhisperKitTranscriberError: LocalizedError {
         }
     }
 }
-

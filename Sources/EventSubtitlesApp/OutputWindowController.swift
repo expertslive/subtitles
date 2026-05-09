@@ -32,7 +32,12 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
         if window == nil {
             createWindow()
         }
-        restoreWindow()
+        if isFilled {
+            // Coming back from filled mode: also re-center, otherwise the window
+            // would stay at the external-display-sized frame from fillExternalDisplay.
+            resetWindowedState()
+            centerOnMainScreen()
+        }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -84,10 +89,12 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
         if window == nil {
             createWindow()
         }
+        resetWindowedState()
+        centerOnMainScreen()
+    }
 
-        guard let window else {
-            return
-        }
+    private func resetWindowedState() {
+        guard let window else { return }
 
         NSApp.presentationOptions = []
         isFilled = false
@@ -95,6 +102,10 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.level = .normal
         window.collectionBehavior = [.managed, .fullScreenPrimary]
+    }
+
+    private func centerOnMainScreen() {
+        guard let window else { return }
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 120, y: 120, width: 1280, height: 720)
         let size = NSSize(width: min(1280, screen.width * 0.82), height: min(720, screen.height * 0.82))
@@ -131,7 +142,7 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
     private func createWindow() {
         let hostingController = NSHostingController(
             rootView: SubtitleOutputView(governsLayout: true)
-                .environmentObject(state)
+                .environment(state)
         )
 
         let newWindow = NSWindow(
@@ -141,10 +152,16 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
             defer: false
         )
         newWindow.title = "Subtitle Output"
+        let didRestoreFrame = newWindow.setFrameAutosaveName("SubtitleOutput")
+        newWindow.isRestorable = true
         newWindow.contentViewController = hostingController
         newWindow.delegate = self
         newWindow.isReleasedWhenClosed = false
         newWindow.colorSpace = .sRGB
         window = newWindow
+
+        if !didRestoreFrame {
+            centerOnMainScreen()
+        }
     }
 }

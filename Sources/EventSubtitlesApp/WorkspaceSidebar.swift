@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct WorkspaceSidebar: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
     @Binding var selection: OperatorWorkspace
 
     var body: some View {

@@ -25,6 +25,10 @@
 - Calm Blocks needs an idle-tail flush. If ASR does not send a final segment, publish the remaining held words after the maximum latency so the last spoken sentence does not wait for the next sentence.
 - Standard macOS toolbar controls can change intrinsic size on hover/focus. Keep operator toolbar controls in fixed frames so live controls do not shift across split-view dividers.
 - Avoid `LazyVGrid` for uneven settings sections when each column should flow independently. Separate vertical columns prevent short cards from inheriting blank space from tall neighbor cells.
+- Demand-driven caption ticks are better than a constant UI timer. Schedule the next update from new speech, cue deadlines, idle-tail flushes, and auto-clear windows so the operator UI does less work during quiet moments.
+- SwiftUI state changes in a live app should invalidate as little UI as possible. Keep shared app state observable, but move expensive derived caption fitting and glossary checks behind cached/core helpers.
+- Output-window placement is operational state. Preserve the frame and filled/restored mode so a relaunch does not force the operator to rebuild the HDMI setup.
+- Quit while live must be an explicit, awaited shutdown path. A normal app quit should not silently leave a capture session or session log half-stopped.
 
 ## WhisperKit
 

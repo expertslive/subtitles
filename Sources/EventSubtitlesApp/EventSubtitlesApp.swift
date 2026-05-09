@@ -3,14 +3,15 @@ import SwiftUI
 
 @main
 struct EventSubtitlesApp: App {
-    @StateObject private var appState = AppState()
+    @State private var appState = AppState()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup("Subtitles") {
             OperatorView()
-                .environmentObject(appState)
-                .preferredColorScheme(.dark)
+                .environment(appState)
                 .frame(minWidth: 1180, minHeight: 760)
+                .onAppear { appDelegate.state = appState }
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
@@ -24,13 +25,13 @@ struct EventSubtitlesApp: App {
                     appState.start()
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(appState.isRunning)
+                .disabled(appState.isRunning || appState.isStarting)
 
                 Button("Stop") {
                     Task { await appState.stop() }
                 }
                 .keyboardShortcut(".", modifiers: .command)
-                .disabled(!appState.isRunning)
+                .disabled(!appState.isRunning && !appState.isStarting)
 
                 Divider()
 
@@ -70,12 +71,18 @@ struct EventSubtitlesApp: App {
                 }
             }
         }
+
+        Settings {
+            SettingsView()
+                .environment(appState)
+                .frame(minWidth: 640, minHeight: 480)
+        }
     }
 
     private func showAboutPanel() {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "3.2.0"
-        let build = info?["CFBundleVersion"] as? String ?? "7"
+        let version = info?["CFBundleShortVersionString"] as? String ?? "3.3.0"
+        let build = info?["CFBundleVersion"] as? String ?? "8"
         let credits = NSAttributedString(
             string: """
             Offline live subtitles and Dutch/English translation for events.
@@ -94,5 +101,24 @@ struct EventSubtitlesApp: App {
             .version: "Build \(build)",
             .credits: credits
         ])
+    }
+}
+
+private struct SettingsView: View {
+    var body: some View {
+        TabView {
+            StyleWorkspace()
+                .tabItem { Label("Style", systemImage: "textformat") }
+
+            AudioWorkspace()
+                .tabItem { Label("Audio", systemImage: "waveform") }
+
+            ModelsWorkspace()
+                .tabItem { Label("Models", systemImage: "cpu") }
+
+            TranslationWorkspace()
+                .tabItem { Label("Translation", systemImage: "arrow.left.arrow.right") }
+        }
+        .padding(12)
     }
 }

@@ -18,6 +18,7 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 
 - operator screen for controls, glossary, audio level, and transcript history
 - persistent operator strip with full workspaces for Live, Style, Glossary, Logs, Models, Translation, Audio, and Output
+- macOS toolbar controls for session, capture, source, mode, meter, Start/Stop, panic blank, and output-window actions
 - second-window subtitle output with chroma green background
 - configurable font, size, colors, margins, and two/three-line layout
 - fine-position controls for nudging captions left/right/up/down
@@ -25,6 +26,7 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 - TV-style live roll-up captions with line hold and idle flush controls
 - panic blank and output blank controls for live-event recovery
 - automatic sleep prevention while a subtitle session is running
+- Settings window for setup work away from the live operator screen
 - local pipeline interfaces for ASR and translation engines
 - task-focused capture modes for demo captions, live WhisperKit subtitles, and audio-only recording
 - app-level audio input selector with system-default fallback
@@ -60,7 +62,7 @@ swift run PrepareWhisperModel large-v3-v20240930_626MB
 GitHub releases include a zipped macOS app bundle:
 
 ```text
-EventSubtitles-v3.2.0-macos-arm64.zip
+EventSubtitles-v3.3.0-macos-arm64.zip
 ```
 
 Unzip it and launch `EventSubtitles.app`. The app is ad-hoc signed for local testing, so macOS may require opening it from Finder with Control-click > Open the first time.

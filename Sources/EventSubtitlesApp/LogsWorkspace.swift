@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct LogsWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     private let sessionFileNames = [
         "metadata.json",
@@ -72,7 +72,6 @@ struct LogsWorkspace: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .navigationTitle("Logs")
     }
 
     private var logFileList: some View {

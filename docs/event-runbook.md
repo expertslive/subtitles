@@ -13,6 +13,7 @@
 9. Open the Output workspace, show the output window, and move it to the HDMI display.
 10. Use `Fill Display` and confirm the downstream video switcher keys the chroma green correctly.
 11. Leave `Keep Mac awake` enabled unless another venue power plan is managing the machine.
+12. Use the Settings window for deeper setup work if you need to adjust Style, Audio, Models, or Translation without changing the active workspace.
 
 ## Recommended Settings
 
@@ -60,6 +61,7 @@
 - Translation: configure translation mode and local translation commands.
 - Audio: select the input interface, check fallback/default status, audio level, clipping, power, and recording status.
 - Output: show/fill/restore the output window and choose chroma or black background.
+- Settings window: alternate setup surface for Style, Audio, Models, and Translation.
 
 ## After The Event
 

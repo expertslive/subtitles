@@ -74,6 +74,10 @@ final class AudioCapturePipeline: @unchecked Sendable {
         onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
     ) async throws {
+        guard await requestAudioAccess() else {
+            throw AudioCapturePipelineError.microphoneDenied
+        }
+
         try await start(
             inputDeviceID: inputDeviceID,
             recordingURL: recordingURL,
@@ -92,13 +96,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
     ) async throws {
-        guard await requestAudioAccess() else {
-            throw AudioCapturePipelineError.microphoneDenied
-        }
-
         let wasRunning = stateLock.withLock { running }
         if wasRunning {
-            stop()
+            stop(keepRecordingFile: preserveExistingRecording)
         }
 
         levelHandler = onLevel
@@ -151,6 +151,9 @@ final class AudioCapturePipeline: @unchecked Sendable {
         stateLock.lock()
         guard running else {
             stateLock.unlock()
+            if !keepRecordingFile {
+                recordingFile = nil
+            }
             return
         }
         running = false

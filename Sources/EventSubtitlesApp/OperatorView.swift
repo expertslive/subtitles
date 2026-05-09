@@ -1,11 +1,12 @@
 import SwiftUI
 
 struct OperatorView: View {
-    @EnvironmentObject var state: AppState
+    @Environment(AppState.self) var state
 
     var body: some View {
+        @Bindable var bindableState = state
         NavigationSplitView {
-            WorkspaceSidebar(selection: $state.selectedWorkspace)
+            WorkspaceSidebar(selection: $bindableState.selectedWorkspace)
                 .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
         } content: {
             NowPanel()

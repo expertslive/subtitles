@@ -115,6 +115,92 @@ func testSRTAppendingMatchesFullFormat() -> Bool {
     )
 }
 
+private func testCaptionTickSchedulerComputesNearestDeadline() -> Bool {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    let soonest = now.addingTimeInterval(0.8)
+    let deadlines: [Date?] = [
+        soonest,                        // queued cue due in 0.8s
+        now.addingTimeInterval(1.5),    // line-min-hold expiry in 1.5s
+        nil,                            // idle-flush not pending
+        now.addingTimeInterval(5.0)     // auto-clear in 5s
+    ]
+    let nearest = CaptionTickScheduler.nearestDeadline(from: deadlines, fallback: now.addingTimeInterval(60))
+    return expectEqual(nearest, soonest, "nearest deadline picks smallest non-nil")
+}
+
+private func testCaptionTickSchedulerUsesFallbackWhenAllNil() -> Bool {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    let fallback = now.addingTimeInterval(60)
+    let nearest = CaptionTickScheduler.nearestDeadline(from: [nil, nil, nil], fallback: fallback)
+    return expectEqual(nearest, fallback, "all-nil deadlines fall back to provided default")
+}
+
+private func testCaptionLineFitterPicksNewestThatFit() -> Bool {
+    let candidates = ["A", "B", "C", "D", "E"]
+    // Each line takes 1 visual line; budget is 2.
+    let picked = CaptionLineFitter.pickVisibleLogicalLines(
+        candidates: candidates,
+        maxVisualLines: 2,
+        measureVisualLineCount: { _ in 1 }
+    )
+    return expectEqual(picked, ["D", "E"], "picks newest two when each is one visual line")
+}
+
+private func testCaptionLineFitterIncludesOversizedSingleLine() -> Bool {
+    let picked = CaptionLineFitter.pickVisibleLogicalLines(
+        candidates: ["short", "huge wraps to four"],
+        maxVisualLines: 2,
+        measureVisualLineCount: { $0 == "huge wraps to four" ? 4 : 1 }
+    )
+    return expectEqual(picked, ["huge wraps to four"], "oversized newest line included alone")
+}
+
+private func readSource(_ relativePath: String) -> String? {
+    let sourceURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent(relativePath)
+    return try? String(contentsOf: sourceURL, encoding: .utf8)
+}
+
+private func testAppStateStartOnlyRunsSessionAfterCaptureSucceeds() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
+        fputs("FAIL: AppState source should be readable\n", stderr)
+        return false
+    }
+
+    guard let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let runningSet = source.range(of: "self.isRunning = true"),
+          let transcriptionStart = source.range(of: "self.startTranscriptionEngine()")
+    else {
+        fputs("FAIL: AppState start lifecycle markers should exist\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        captureStart.lowerBound < runningSet.lowerBound && runningSet.lowerBound < transcriptionStart.lowerBound,
+        true,
+        "AppState should mark running and start transcription only after capture succeeds"
+    ) && expectEqual(
+        source.contains("self.handleCaptureStartFailure(error)"),
+        true,
+        "capture start failure should roll back session side effects"
+    )
+}
+
+private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppDelegate.swift") else {
+        fputs("FAIL: AppDelegate source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains(".terminateLater") &&
+            source.contains("await state.stop()") &&
+            source.contains("sender.reply(toApplicationShouldTerminate: true)"),
+        true,
+        "confirmed quit should await session stop before replying to terminate"
+    )
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -122,7 +208,13 @@ let tests = [
     ("promptBuilderIncludesSessionAndGlossaryTerms", testPromptBuilderIncludesSessionAndGlossaryTerms),
     ("promptBuilderDropsEmptyParts", testPromptBuilderDropsEmptyParts),
     ("promptBuilderTruncatesAtCharacterLimit", testPromptBuilderTruncatesAtCharacterLimit),
-    ("srtAppendingMatchesFullFormat", testSRTAppendingMatchesFullFormat)
+    ("srtAppendingMatchesFullFormat", testSRTAppendingMatchesFullFormat),
+    ("captionTickSchedulerComputesNearestDeadline", testCaptionTickSchedulerComputesNearestDeadline),
+    ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil),
+    ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
+    ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
+    ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
+    ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop)
 ]
 
 var failed = 0

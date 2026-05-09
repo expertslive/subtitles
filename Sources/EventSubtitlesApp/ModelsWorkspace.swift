@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ModelsWorkspace: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     var body: some View {
         GeometryReader { proxy in
@@ -29,7 +29,6 @@ struct ModelsWorkspace: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .navigationTitle("Models")
     }
 
     private var modelSideColumn: some View {
@@ -51,7 +50,7 @@ struct ModelsWorkspace: View {
             LabeledContent("Engine", value: state.transcriptionEngine.label)
             LabeledContent("Model", value: state.whisperModelName)
             LabeledContent("Status", value: state.modelStatus)
-            LabeledContent("Running", value: state.isRunning ? "Yes" : "No")
+            LabeledContent("Running", value: state.isRunning || state.isStarting ? "Yes" : "No")
         }
     }
 
@@ -117,7 +116,7 @@ struct ModelsWorkspace: View {
                 Text("Base").tag("base")
                 Text("Tiny").tag("tiny")
             }
-            .disabled(state.isRunning || state.isPreparingModel)
+            .disabled(state.isRunning || state.isStarting || state.isPreparingModel)
 
             TextField("Model name", text: Binding(
                 get: { state.whisperModelName },
@@ -127,7 +126,7 @@ struct ModelsWorkspace: View {
                 }
             ))
             .textFieldStyle(.roundedBorder)
-            .disabled(state.isRunning || state.isPreparingModel)
+            .disabled(state.isRunning || state.isStarting || state.isPreparingModel)
 
             Button {
                 state.prepareWhisperKitModel()
@@ -138,7 +137,7 @@ struct ModelsWorkspace: View {
                 )
                 .frame(maxWidth: .infinity)
             }
-            .disabled(state.isRunning || state.isPreparingModel)
+            .disabled(state.isRunning || state.isStarting || state.isPreparingModel)
 
             Text(state.modelStatus)
                 .font(.caption)

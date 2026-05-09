@@ -103,34 +103,21 @@ struct AudioLevelMeter: View {
     var showsTicks = true
     var peakHold = false
 
-    @State private var peakLevel = 0.0
+    @State private var displayedLevel: Double = 0
+    @State private var displayedPeak: Double = 0
+    @State private var lastUpdate: Date = .distantPast
 
     var body: some View {
         HStack(spacing: 8) {
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.secondary.opacity(0.18))
-
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(levelColor)
-                        .frame(width: max(3, proxy.size.width * clampedLevel))
-
-                    if peakHold {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.85))
-                            .frame(width: 2)
-                            .offset(x: max(0, proxy.size.width * peakLevel - 1))
-                    }
-
-                    if showsTicks {
-                        ForEach([-18.0, -12.0, -6.0, 0.0], id: \.self) { tick in
-                            Rectangle()
-                                .fill(Color.white.opacity(tick == 0 ? 0.5 : 0.22))
-                                .frame(width: 1)
-                                .offset(x: proxy.size.width * tickPosition(tick))
-                        }
-                    }
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                MeterCanvas(
+                    target: clamped(level),
+                    displayedLevel: displayedLevel,
+                    displayedPeak: displayedPeak,
+                    showsTicks: showsTicks
+                )
+                .onChange(of: context.date) { _, newDate in
+                    updateEnvelopes(now: newDate)
                 }
             }
             .frame(height: 10)
@@ -138,49 +125,86 @@ struct AudioLevelMeter: View {
             if showsDB {
                 Text(dbText)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(level > 0.92 ? .red : .secondary)
+                    .foregroundStyle(displayedLevel > 0.92 ? .red : .secondary)
                     .frame(width: 48, alignment: .trailing)
             }
         }
-        .onAppear {
-            peakLevel = clampedLevel
-        }
-        .onChange(of: level) { _, newValue in
-            let newLevel = min(max(newValue, 0), 1)
-            if newLevel >= peakLevel {
-                peakLevel = newLevel
-            }
-            guard peakHold else {
-                return
-            }
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(600))
-                withAnimation(.easeOut(duration: 0.2)) {
-                    peakLevel = min(max(level, 0), 1)
-                }
-            }
-        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Input level")
+        .accessibilityValue("\(Int(clamped(level) * 100)) percent, \(dbText)")
     }
 
-    private var clampedLevel: Double {
-        min(max(level, 0), 1)
+    private func clamped(_ v: Double) -> Double { min(max(v, 0), 1) }
+
+    private func updateEnvelopes(now: Date) {
+        let dt = max(0, min(0.1, now.timeIntervalSince(lastUpdate)))
+        lastUpdate = now
+        let target = clamped(level)
+
+        // RMS: low-pass smooth, time constant ~80ms.
+        let rmsAlpha = 1 - exp(-dt / 0.08)
+        displayedLevel = displayedLevel + (target - displayedLevel) * rmsAlpha
+
+        // Peak: instant attack, slow release.
+        if target >= displayedPeak {
+            displayedPeak = target
+        } else if peakHold {
+            // Decay ~0.6 unit per second.
+            let releasePerSec = 0.6
+            displayedPeak = max(target, displayedPeak - releasePerSec * dt)
+        } else {
+            displayedPeak = displayedLevel
+        }
     }
 
     private var dbText: String {
-        let db = 20 * log10(max(level, 0.0001))
+        let db = 20 * log10(max(displayedLevel, 0.0001))
         return "\(db.formatted(.number.precision(.fractionLength(0)))) dB"
     }
+}
 
-    private var levelColor: Color {
-        switch level {
-        case 0.92...:
-            .red
-        case 0.72...:
-            .orange
-        case 0.58...:
-            .yellow
-        default:
-            .green
+private struct MeterCanvas: View {
+    let target: Double
+    let displayedLevel: Double
+    let displayedPeak: Double
+    let showsTicks: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.secondary.opacity(0.18))
+
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(LinearGradient(
+                        colors: [.green, .yellow, .orange, .red],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ))
+                    .frame(width: max(3, proxy.size.width * displayedLevel))
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: 2)
+                    .offset(x: max(0, proxy.size.width * displayedPeak - 1))
+
+                if displayedLevel > 0.92 {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.red)
+                        .offset(x: proxy.size.width - 14, y: -2)
+                        .accessibilityHidden(true)
+                }
+
+                if showsTicks {
+                    ForEach([-18.0, -12.0, -6.0, 0.0], id: \.self) { tick in
+                        Rectangle()
+                            .fill(Color.white.opacity(tick == 0 ? 0.5 : 0.22))
+                            .frame(width: 1)
+                            .offset(x: proxy.size.width * tickPosition(tick))
+                    }
+                }
+            }
         }
     }
 
@@ -211,7 +235,7 @@ struct ToolbarAudioMeter: View {
 }
 
 struct PreviewPanel: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     var title = "Output preview"
     var maxHeight: CGFloat = 430
@@ -223,7 +247,7 @@ struct PreviewPanel: View {
 
             GeometryReader { proxy in
                 SubtitleOutputView(ignoresSafeArea: false, animatesCaptionChanges: false)
-                    .environmentObject(state)
+                    .environment(state)
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
             }
@@ -280,7 +304,7 @@ struct BackgroundSwatch: View {
 }
 
 struct FinePositionControls: View {
-    @EnvironmentObject private var state: AppState
+    @Environment(AppState.self) private var state
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

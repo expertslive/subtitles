@@ -30,6 +30,8 @@ The right side is split into task-focused workspaces:
 
 The workspace layout is responsive: setup-heavy views use columns when there is enough horizontal space and stack when the window is narrower. Workspace buttons have subtle surfaces and borders so operators can read them as clickable controls without turning the app into a heavy toolbar.
 
+Global live controls live in the macOS toolbar: session name, capture mode, source language, processing mode, audio meter, Start/Stop, panic blank, and output-window actions. This keeps the event-critical controls reachable without duplicating them in every workspace.
+
 ## First Engine Target
 
 The first real ASR integration should use WhisperKit because it is already designed for Apple Silicon/Core ML. Translation should remain a separate module so subtitles-only mode is low latency and translation mode can buffer slightly more for readability.
@@ -66,6 +68,8 @@ The app icon is generated during bundling from `Assets/AppIconSource.jpg`. The s
 
 The default About panel is replaced with a shorter app-specific About panel describing the local/offline subtitle workflow.
 
+The app also exposes a Settings scene for setup-oriented Style, Audio, Models, and Translation controls. That keeps longer preparation tasks available without crowding the live operator workspace.
+
 ## Recording Storage
 
 Session audio is recorded as `input-audio.caf` after conversion to 16 kHz mono Float32, the same stream that feeds WhisperKit. This keeps the recording aligned with the ASR path and makes storage predictable.
@@ -89,7 +93,7 @@ The practical planning number is 5 GB per stage per full day, with extra free di
 
 Raw ASR partials are useful for the operator but should not drive the public output directly. Streaming ASR can revise words as more context arrives, which makes the audience output feel restless if every partial update redraws the sentence.
 
-The display architecture now includes a draft buffer, stability gate, and caption scheduler. The public HDMI output consumes scheduled stable caption cues, while the operator Live workspace still shows raw draft text for troubleshooting.
+The display architecture now includes a draft buffer, stability gate, and caption scheduler. The public HDMI output consumes scheduled stable caption cues, while the operator Live workspace still shows raw draft text for troubleshooting. Caption display refreshes are demand-driven: new speech, scheduler deadlines, idle-tail flushes, and auto-clear timers request the next tick instead of relying on a constant fixed-rate UI loop.
 
 Calm Blocks also has an idle-tail flush. If WhisperKit keeps the last words as an unstable partial and does not emit a final segment quickly, the app publishes the remaining tail after the configured maximum latency. This prevents the last spoken sentence from waiting until the speaker starts a new sentence.
 

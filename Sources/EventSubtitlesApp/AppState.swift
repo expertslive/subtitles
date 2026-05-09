@@ -6,7 +6,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
-final class AppState: ObservableObject {
+@Observable
+final class AppState {
     static let chromaKeyGreen = Color(.sRGB, red: 0.0, green: 177.0 / 255.0, blue: 64.0 / 255.0, opacity: 1.0)
 
     static func colorMatches(_ a: Color, _ b: Color, tolerance: CGFloat = 0.01) -> Bool {
@@ -17,81 +18,88 @@ final class AppState: ObservableObject {
             && abs(lhs.blueComponent - rhs.blueComponent) < tolerance
     }
 
-    @Published var mode: ProcessingMode = .subtitlesOnly {
+    var mode: ProcessingMode = .subtitlesOnly {
         didSet {
             if mode != .subtitlesOnly {
                 sourceLanguage = mode.sourceLanguage
             }
         }
     }
-    @Published var sourceLanguage: SourceLanguage = .automatic
+    var sourceLanguage: SourceLanguage = .automatic
 
-    @Published var isRunning = false
-    @Published var audioLevel = 0.0
-    @Published var audioInputDevices: [AudioInputDeviceInfo] = []
-    @Published var selectedAudioInputDeviceID: String?
-    @Published var effectiveAudioInputDeviceID: String?
-    @Published var audioInputDescription = "Input unknown"
-    @Published var audioInputSelectionStatus = "Input unknown"
-    @Published var engineStatus = "Simulator idle"
-    @Published var errorMessage: String?
-    @Published var sessionName = "Main stage"
-    @Published var selectedWorkspace: OperatorWorkspace = .live
-    @Published var transcriptionEngine: TranscriptionEngineChoice = .simulator
-    @Published var whisperModelName = "large-v3-v20240930_626MB"
-    @Published var modelStatus = "Not prepared"
-    @Published var isPreparingModel = false
-    @Published var translationEngine: TranslationEngineChoice = .ruleBased
-    @Published var translationCommandPath = ""
-    @Published var translationCommandArguments = "--from {source} --to {target}"
+    var isRunning = false
+    var isStarting = false
+    var audioLevel = 0.0
+    var audioInputDevices: [AudioInputDeviceInfo] = []
+    var selectedAudioInputDeviceID: String?
+    var effectiveAudioInputDeviceID: String?
+    var audioInputDescription = "Input unknown"
+    var audioInputSelectionStatus = "Input unknown"
+    var engineStatus = "Simulator idle"
+    var errorMessage: String?
+    var sessionName = "Main stage"
+    var selectedWorkspace: OperatorWorkspace = .live
+    var transcriptionEngine: TranscriptionEngineChoice = .simulator
+    var whisperModelName = "large-v3-v20240930_626MB"
+    var modelStatus = "Not prepared"
+    var isPreparingModel = false
+    var translationEngine: TranslationEngineChoice = .ruleBased
+    var translationCommandPath = ""
+    var translationCommandArguments = "--from {source} --to {target}"
 
-    @Published var currentEvent: TranscriptEvent?
-    @Published var publicCaptionText = "" {
+    var currentEvent: TranscriptEvent?
+    var publicCaptionText = "" {
         didSet {
             if !publicCaptionText.isEmpty && publicCaptionText != oldValue {
                 lastCaptionActivityAt = Date()
             }
         }
     }
-    @Published var captionLayout = CaptionLayout(lines: [])
-    @Published var history: [TranscriptEvent] = []
+    var captionLayout = CaptionLayout(lines: []) {
+        didSet { recomputeVisibleCaptionLines() }
+    }
+    var history: [TranscriptEvent] = []
 
-    @Published var fontName = "Helvetica Neue"
-    @Published var fontSize = 68.0 {
-        didSet { recomputeCaption() }
+    var fontName = "Helvetica Neue" {
+        didSet { perCharWidthCache.removeValue(forKey: "\(oldValue)|\(fontSize)"); recomputeVisibleCaptionLines() }
     }
-    @Published var maxLines = 2 {
-        didSet { recomputeCaption() }
+    var fontSize = 68.0 {
+        didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
-    @Published var targetCharactersPerLine = 42 {
-        didSet { recomputeCaption() }
+    var maxLines = 2 {
+        didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
     }
-    @Published var safeMargin = 78.0
-    @Published var lineSpacing = 8.0
-    @Published var foregroundColor = Color.white
-    @Published var backgroundColor = AppState.chromaKeyGreen
-    @Published var shadowEnabled = true
-    @Published var shadowRadius = 7.0
-    @Published var captionPosition: CaptionVerticalPosition = .bottom
-    @Published var captionOffsetX = 0.0
-    @Published var captionOffsetY = 0.0
-    @Published var captionDisplayMode: CaptionDisplayMode = .calmBlocks
-    @Published var captionStabilityLevel: CaptionStabilityLevel = .calm
-    @Published var captionCommitDelay = CaptionStabilityLevel.calm.defaultCommitDelay
-    @Published var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
-    @Published var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
-    @Published var captionMaximumLatency = 3.0
-    @Published var captionLineMinHold = 2.0
-    @Published var captionIdleFlushAfter = 1.5
+    var targetCharactersPerLine = 42 {
+        didSet { recomputeCaption(); recomputeVisibleCaptionLines() }
+    }
+    var safeMargin = 78.0 {
+        didSet { recomputeVisibleCaptionLines() }
+    }
+    var lineSpacing = 8.0
+    var foregroundColor = Color.white
+    var backgroundColor = AppState.chromaKeyGreen
+    var shadowEnabled = true
+    var shadowRadius = 7.0
+    var captionPosition: CaptionVerticalPosition = .bottom
+    var captionOffsetX = 0.0
+    var captionOffsetY = 0.0
+    var captionDisplayMode: CaptionDisplayMode = .calmBlocks
+    var captionStabilityLevel: CaptionStabilityLevel = .calm
+    var captionCommitDelay = CaptionStabilityLevel.calm.defaultCommitDelay
+    var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
+    var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
+    var captionMaximumLatency = 3.0
+    var captionLineMinHold = 2.0
+    var captionIdleFlushAfter = 1.5
     /// Seconds of caption inactivity after which the green output auto-clears.
     /// 0 disables the auto-clear (captions stay on screen until cleared manually
     /// or until the next session begins).
-    @Published var captionAutoClearAfter = 5.0
-    @Published var draftEvent: TranscriptEvent?
-    @Published var stableCaptionQueueText = ""
-    @Published var captionDisplayLatencyText = "0.0s"
+    var captionAutoClearAfter = 5.0
+    var draftEvent: TranscriptEvent?
+    var stableCaptionQueueText = ""
+    var captionDisplayLatencyText = "0.0s"
 
-    @Published var glossaryText = """
+    var glossaryText = """
     kubernetes => Kubernetes
     postgres => PostgreSQL
     postgresql => PostgreSQL
@@ -101,40 +109,43 @@ final class AppState: ObservableObject {
     macbook air => MacBook Air
     """
 
-    @Published var manualCaption = ""
-    @Published var outputBlanked = false
-    @Published var sessionLogStatus = "No active session"
-    @Published var sessionDirectoryPath: String?
-    @Published var sessionSegmentCount = 0
-    @Published var sessionElapsedText = "00:00:00"
-    @Published var keepMacAwakeDuringSession = true
-    @Published var sleepPreventionStatus = "Awake ready"
-    @Published var appMemoryUsageText = "Unknown"
+    var manualCaption = ""
+    var outputBlanked = false
+    var sessionLogStatus = "No active session"
+    var sessionDirectoryPath: String?
+    var sessionSegmentCount = 0
+    var sessionElapsedText = "00:00:00"
+    var keepMacAwakeDuringSession = true
+    var sleepPreventionStatus = "Awake ready"
+    var appMemoryUsageText = "Unknown"
 
-    private let simulatorTranscriber = MockLocalTranscriber()
-    private let whisperKitTranscriber = WhisperKitTranscriber()
-    private let capturePipeline = AudioCapturePipeline()
-    private let translator = RuleBasedTranslator()
-    private let commandLineTranslator = CommandLineTranslator()
-    private let sessionRecorder = SessionRecorder()
-    private let sessionLogger = SessionLogger()
-    private let settingsStore = AppSettingsStore()
-    private let sleepPreventer = SleepPreventer()
-    private var captionStabilityEngine = CaptionStabilityEngine()
-    private var captionDisplayScheduler = CaptionDisplayScheduler()
-    private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
-    private var outputController: OutputWindowController?
-    private var sessionStartedAt: Date?
-    private var lastCaptionSnapshotAt: Date?
-    private var lastCaptionActivityAt: Date?
+    @ObservationIgnored private let simulatorTranscriber = MockLocalTranscriber()
+    @ObservationIgnored private let whisperKitTranscriber = WhisperKitTranscriber()
+    @ObservationIgnored private let capturePipeline = AudioCapturePipeline()
+    @ObservationIgnored private let translator = RuleBasedTranslator()
+    @ObservationIgnored private let commandLineTranslator = CommandLineTranslator()
+    @ObservationIgnored private let sessionRecorder = SessionRecorder()
+    @ObservationIgnored private let sessionLogger = SessionLogger()
+    @ObservationIgnored private let settingsStore = AppSettingsStore()
+    @ObservationIgnored private var pendingSaveTask: Task<Void, Never>?
+    @ObservationIgnored private let sleepPreventer = SleepPreventer()
+    @ObservationIgnored private var captionStabilityEngine = CaptionStabilityEngine()
+    @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
+    @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
+    @ObservationIgnored private var outputController: OutputWindowController?
+    @ObservationIgnored private var sessionStartedAt: Date?
+    @ObservationIgnored private var lastCaptionSnapshotAt: Date?
+    @ObservationIgnored private var lastCaptionActivityAt: Date?
     /// Pixel width of the live output window's render area. Set by SubtitleOutputView
     /// when it has `governsLayout: true`. Drives the `effectiveTargetCharactersPerLine`
     /// calculation so each logical line fits on one visual row at the chosen font.
-    private var outputRenderWidth: CGFloat = 0
-    private var sessionTimer: Timer?
-    private var captionDisplayTimer: Timer?
-    private var lastDetectedLanguageForDisplay: SourceLanguage?
-    private var lastAudioLevelPublishedAt = Date.distantPast
+    @ObservationIgnored private var outputRenderWidth: CGFloat = 0
+    @ObservationIgnored private var sessionTimer: Timer?
+    @ObservationIgnored private var captionDisplayTimer: DispatchSourceTimer?
+    @ObservationIgnored private var lastDetectedLanguageForDisplay: SourceLanguage?
+    @ObservationIgnored private var lastAudioLevelPublishedAt = Date.distantPast
+    var visibleCaptionLines: [String] = []
+    @ObservationIgnored private var perCharWidthCache: [String: CGFloat] = [:]  // key: "fontName|fontSize"
 
     init() {
         loadSettings()
@@ -144,19 +155,16 @@ final class AppState: ObservableObject {
     }
 
     func start() {
-        guard !isRunning else {
+        guard !isRunning, !isStarting else {
             return
         }
 
-        isRunning = true
+        isStarting = true
         errorMessage = nil
         saveSettings()
-        engineStatus = transcriptionEngine.statusLabel
+        engineStatus = "Starting capture"
         resetCaptionDisplayPipeline(clearOutput: true)
-        startSleepPreventionIfNeeded()
         startSessionLog()
-        startSessionTimer()
-        startCaptionDisplayTimer()
         refreshResourceUsage()
 
         Task { @MainActor [weak self] in
@@ -181,23 +189,34 @@ final class AppState: ObservableObject {
                         }
                     }
                 )
+                guard self.isStarting else {
+                    self.capturePipeline.stop()
+                    return
+                }
+                self.isRunning = true
+                self.isStarting = false
+                self.engineStatus = self.transcriptionEngine.statusLabel
+                self.startSleepPreventionIfNeeded()
+                self.startSessionTimer()
+                self.startCaptionDisplayTimer()
+                self.refreshResourceUsage()
+                self.startTranscriptionEngine()
             } catch {
                 self.sessionLogger.error("Audio capture start failed: \(error.localizedDescription)")
-                self.errorMessage = "Audio capture unavailable: \(error.localizedDescription)"
+                self.handleCaptureStartFailure(error)
             }
         }
-
-        startTranscriptionEngine()
     }
 
     func stop() async {
-        guard isRunning else { return }
+        guard isRunning || isStarting else { return }
 
         simulatorTranscriber.stopNow()
         await whisperKitTranscriber.stop()
         capturePipeline.stop()
         audioLevel = 0
         isRunning = false
+        isStarting = false
         engineStatus = transcriptionEngine.idleStatusLabel
         if captionDisplayMode == .liveRollUp {
             flushLinePacedOutput(now: Date())
@@ -208,6 +227,22 @@ final class AppState: ObservableObject {
         stopSleepPrevention()
         stopSessionTimer()
         stopSessionLog()
+        flushSettingsImmediately()
+        refreshResourceUsage()
+    }
+
+    private func handleCaptureStartFailure(_ error: Error) {
+        capturePipeline.stop()
+        audioLevel = 0
+        isRunning = false
+        isStarting = false
+        engineStatus = transcriptionEngine.idleStatusLabel
+        stopCaptionDisplayTimer()
+        stopSleepPrevention()
+        stopSessionTimer()
+        stopSessionLog()
+        sessionLogStatus = "Start failed"
+        errorMessage = "Audio capture unavailable: \(error.localizedDescription)"
         refreshResourceUsage()
     }
 
@@ -317,7 +352,7 @@ final class AppState: ObservableObject {
             do {
                 try await self.capturePipeline.restart(
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
-                    recordingURL: nil
+                    recordingURL: nil // Keep the active CAF writer instead of rotating files mid-session.
                 )
                 self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
                 if priorDescription != self.audioInputDescription {
@@ -343,10 +378,7 @@ final class AppState: ObservableObject {
 
     private func publishAudioLevel(_ level: Double) {
         let now = Date()
-        guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 15.0 || level > 0.92 else {
-            return
-        }
-
+        guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 60.0 else { return }
         lastAudioLevelPublishedAt = now
         audioLevel = level
     }
@@ -375,6 +407,7 @@ final class AppState: ObservableObject {
         let clamped = max(0, width)
         if abs(clamped - outputRenderWidth) > 1 {
             outputRenderWidth = clamped
+            recomputeVisibleCaptionLines()
         }
     }
 
@@ -448,44 +481,61 @@ final class AppState: ObservableObject {
         saveSettings()
     }
 
-    func saveSettings() {
-        settingsStore.save(
-            AppSettings(
-                mode: mode,
-                sourceLanguage: sourceLanguage,
-                transcriptionEngine: transcriptionEngine.rawValue,
-                translationEngine: translationEngine.rawValue,
-                sessionName: sessionName,
-                whisperModelName: whisperModelName,
-                translationCommandPath: translationCommandPath,
-                translationCommandArguments: translationCommandArguments,
-                glossaryText: glossaryText,
-                fontName: fontName,
-                fontSize: fontSize,
-                maxLines: maxLines,
-                targetCharactersPerLine: targetCharactersPerLine,
-                safeMargin: safeMargin,
-                lineSpacing: lineSpacing,
-                foregroundColor: CodableColor(color: foregroundColor),
-                backgroundColor: CodableColor(color: backgroundColor),
-                shadowEnabled: shadowEnabled,
-                shadowRadius: shadowRadius,
-                captionPosition: captionPosition.rawValue,
-                captionOffsetX: captionOffsetX,
-                captionOffsetY: captionOffsetY,
-                keepMacAwakeDuringSession: keepMacAwakeDuringSession,
-                captionDisplayMode: captionDisplayMode,
-                captionStabilityLevel: captionStabilityLevel,
-                captionCommitDelay: captionCommitDelay,
-                captionUnstableWordCount: captionUnstableWordCount,
-                captionMinimumHold: captionMinimumHold,
-                captionMaximumLatency: captionMaximumLatency,
-                captionLineMinHold: captionLineMinHold,
-                captionIdleFlushAfter: captionIdleFlushAfter,
-                captionAutoClearAfter: captionAutoClearAfter,
-                selectedAudioInputDeviceID: selectedAudioInputDeviceID
-            )
+    /// Writes the current settings to disk synchronously, cancelling any in-flight
+    /// debounce. Call from `stop()` and from app termination to ensure no work is
+    /// lost when the user ends a session or quits.
+    func flushSettingsImmediately() {
+        pendingSaveTask?.cancel()
+        pendingSaveTask = nil
+        settingsStore.save(currentAppSettings())
+    }
+
+    private func currentAppSettings() -> AppSettings {
+        AppSettings(
+            mode: mode,
+            sourceLanguage: sourceLanguage,
+            transcriptionEngine: transcriptionEngine.rawValue,
+            translationEngine: translationEngine.rawValue,
+            sessionName: sessionName,
+            whisperModelName: whisperModelName,
+            translationCommandPath: translationCommandPath,
+            translationCommandArguments: translationCommandArguments,
+            glossaryText: glossaryText,
+            fontName: fontName,
+            fontSize: fontSize,
+            maxLines: maxLines,
+            targetCharactersPerLine: targetCharactersPerLine,
+            safeMargin: safeMargin,
+            lineSpacing: lineSpacing,
+            foregroundColor: CodableColor(color: foregroundColor),
+            backgroundColor: CodableColor(color: backgroundColor),
+            shadowEnabled: shadowEnabled,
+            shadowRadius: shadowRadius,
+            captionPosition: captionPosition.rawValue,
+            captionOffsetX: captionOffsetX,
+            captionOffsetY: captionOffsetY,
+            keepMacAwakeDuringSession: keepMacAwakeDuringSession,
+            captionDisplayMode: captionDisplayMode,
+            captionStabilityLevel: captionStabilityLevel,
+            captionCommitDelay: captionCommitDelay,
+            captionUnstableWordCount: captionUnstableWordCount,
+            captionMinimumHold: captionMinimumHold,
+            captionMaximumLatency: captionMaximumLatency,
+            captionLineMinHold: captionLineMinHold,
+            captionIdleFlushAfter: captionIdleFlushAfter,
+            captionAutoClearAfter: captionAutoClearAfter,
+            selectedAudioInputDeviceID: selectedAudioInputDeviceID
         )
+    }
+
+    func saveSettings() {
+        pendingSaveTask?.cancel()
+        pendingSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            self.settingsStore.save(self.currentAppSettings())
+            self.pendingSaveTask = nil
+        }
     }
 
     func importGlossary() {
@@ -915,16 +965,56 @@ final class AppState: ObservableObject {
     }
 
     private func startCaptionDisplayTimer() {
-        captionDisplayTimer?.invalidate()
-        captionDisplayTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+        stopCaptionDisplayTimer()
+        scheduleNextCaptionTick()
+    }
+
+    private func scheduleNextCaptionTick() {
+        captionDisplayTimer?.cancel()
+        let now = Date()
+        let deadline = nextCaptionDeadline(now: now)
+        let delay = max(0.05, deadline.timeIntervalSince(now))
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + delay, leeway: .milliseconds(20))
+        timer.setEventHandler { [weak self] in
             Task { @MainActor [weak self] in
-                await self?.tickCaptionDisplayPipeline()
+                guard let self else { return }
+                await self.tickCaptionDisplayPipeline()
+                if self.isRunning {
+                    self.scheduleNextCaptionTick()
+                }
             }
         }
+        timer.resume()
+        captionDisplayTimer = timer
+    }
+
+    /// Computes the next time the caption pipeline should wake up. Looks at
+    /// auto-clear and idle-flush deadlines. Falls back to 1 second if nothing
+    /// is pending — that's the demand-driven equivalent of the old 5 Hz poll
+    /// but at 1 Hz instead.
+    private func nextCaptionDeadline(now: Date) -> Date {
+        var deadlines: [Date?] = []
+
+        // Auto-clear deadline
+        if captionAutoClearAfter > 0, !publicCaptionText.isEmpty, let last = lastCaptionActivityAt {
+            deadlines.append(last.addingTimeInterval(captionAutoClearAfter))
+        }
+
+        // Idle-flush deadline (only meaningful when not in fastDraft and pending snapshot exists)
+        if captionDisplayMode != .fastDraft, mode == .subtitlesOnly, let snap = lastCaptionSnapshotAt {
+            deadlines.append(snap.addingTimeInterval(captionMaximumLatency))
+        }
+
+        return CaptionTickScheduler.nearestDeadline(
+            from: deadlines,
+            fallback: now.addingTimeInterval(1.0)
+        )
     }
 
     private func stopCaptionDisplayTimer() {
-        captionDisplayTimer?.invalidate()
+        captionDisplayTimer?.cancel()
         captionDisplayTimer = nil
     }
 
@@ -1114,6 +1204,8 @@ final class AppState: ObservableObject {
         if isFinal {
             lastCaptionSnapshotAt = nil
         }
+
+        if isRunning { scheduleNextCaptionTick() }
     }
 
     private func publishFastDraft(
@@ -1141,6 +1233,8 @@ final class AppState: ObservableObject {
         if isFinal {
             recordDisplayedEvent(event, detectedLanguage: detectedLanguage)
         }
+
+        if isRunning { scheduleNextCaptionTick() }
     }
 
     private func publishNextCaptionCue(force: Bool = false) {
@@ -1180,6 +1274,7 @@ final class AppState: ObservableObject {
 
         recordDisplayedEvent(event, detectedLanguage: lastDetectedLanguageForDisplay)
         updateCaptionSchedulerStatus()
+        if isRunning { scheduleNextCaptionTick() }
     }
 
     private func refreshLinePacedOutput(
@@ -1234,19 +1329,22 @@ final class AppState: ObservableObject {
             lineMinHold: 0,
             idleFlushAfter: 0
         )
-        refreshLinePacedOutput(
-            now: now,
-            configuration: CaptionDisplayConfiguration(
-                mode: captionDisplayMode,
-                stability: captionStabilityLevel,
-                commitDelay: captionCommitDelay,
-                unstableWordCount: captionUnstableWordCount,
-                minimumHold: captionMinimumHold,
-                maximumLatency: captionMaximumLatency,
-                lineMinHold: 0,
-                idleFlushAfter: 0
+
+        let emittedLines = linePacedRoller.drainEmittedLines()
+        for line in emittedLines {
+            let event = TranscriptEvent(
+                sourceText: line,
+                displayText: line,
+                isFinal: true,
+                createdAt: now
             )
-        )
+            recordDisplayedEvent(event, detectedLanguage: lastDetectedLanguageForDisplay)
+        }
+
+        let lines = linePacedRoller.visibleLines
+        publicCaptionText = lines.joined(separator: " ")
+        captionLayout = CaptionLayout(lines: lines)
+        updateCaptionSchedulerStatus()
     }
 
     private func tickCaptionDisplayPipeline() async {
@@ -1411,6 +1509,61 @@ final class AppState: ObservableObject {
             targetCharactersPerLine: targetCharactersPerLine
         )
         captionLayout = composer.compose(publicCaptionText)
+    }
+
+    /// Recomputes the visible logical lines for the audience-facing output. Called
+    /// whenever captionLayout, fontName, fontSize, maxLines, safeMargin, or
+    /// outputRenderWidth changes. Caches per-character widths per (fontName, fontSize)
+    /// so the per-word NSAttributedString measurement runs at most once per font.
+    func recomputeVisibleCaptionLines() {
+        let candidates = captionLayout.lines
+        guard !candidates.isEmpty, maxLines > 0 else {
+            if !visibleCaptionLines.isEmpty { visibleCaptionLines = [] }
+            return
+        }
+
+        let availableWidth = max(100, outputRenderWidth - 2 * safeMargin)
+        let cacheKey = "\(fontName)|\(fontSize)"
+        let perChar: CGFloat
+        if let cached = perCharWidthCache[cacheKey] {
+            perChar = cached
+        } else {
+            let baseFont = NSFont(name: fontName, size: CGFloat(fontSize))
+                ?? NSFont.systemFont(ofSize: CGFloat(fontSize))
+            let descriptor = baseFont.fontDescriptor.withSymbolicTraits(.bold)
+            let font = NSFont(descriptor: descriptor, size: CGFloat(fontSize)) ?? baseFont
+            let sample = "Mwoenarsl" as NSString
+            let sampleWidth = sample.size(withAttributes: [.font: font]).width
+            perChar = sampleWidth / CGFloat(sample.length)
+            perCharWidthCache[cacheKey] = perChar
+        }
+        guard perChar > 0 else { return }
+
+        let measure: (String) -> Int = { line in
+            let words = line.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard !words.isEmpty else { return 0 }
+            var lines = 1
+            var currentWidth: CGFloat = 0
+            for word in words {
+                let wordWidth = CGFloat(word.count + 1) * perChar
+                if currentWidth + wordWidth <= availableWidth || currentWidth == 0 {
+                    currentWidth += wordWidth
+                } else {
+                    lines += 1
+                    currentWidth = wordWidth
+                }
+            }
+            return lines
+        }
+
+        let picked = CaptionLineFitter.pickVisibleLogicalLines(
+            candidates: candidates,
+            maxVisualLines: maxLines,
+            measureVisualLineCount: measure
+        )
+        if picked != visibleCaptionLines {
+            visibleCaptionLines = picked
+        }
     }
 }
 
