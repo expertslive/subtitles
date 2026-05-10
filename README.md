@@ -12,29 +12,16 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 - [Event runbook](docs/event-runbook.md)
 - [Lessons learned](docs/lessons-learned.md)
 - [Release process](docs/release-process.md)
-- [Original project prompt](initial_prompt.txt)
 
 ## Features
 
-- operator screen for controls, glossary, audio level, and transcript history
-- persistent operator strip with full workspaces for Live, Style, Glossary, Logs, Models, Translation, Audio, and Output
-- macOS toolbar controls for session, capture, source, mode, meter, Start/Stop, panic blank, and output-window actions
-- second-window subtitle output with chroma green background
-- configurable font, size, colors, margins, and two/three-line layout
-- fine-position controls for nudging captions left/right/up/down
-- calm public-caption display modes with draft/stable separation
-- TV-style live roll-up captions with line hold and idle flush controls
-- panic blank and output blank controls for live-event recovery
-- automatic sleep prevention while a subtitle session is running
-- Settings window for setup work away from the live operator screen
-- local pipeline interfaces for ASR and translation engines
-- task-focused capture modes for demo captions, live WhisperKit subtitles, and audio-only recording
-- app-level audio input selector with system-default fallback
-- single audio capture pipeline shared by metering, CAF recording, and WhisperKit
-- WhisperKit/Core ML live ASR engine path
-- glossary term editor with add/edit/delete rows, alias groups, validation, suggestions, and JSON/CSV import/export
-- timestamped session logging with transcripts, SRTs, JSONL segments, and raw input audio
-- custom macOS app icon bundled into `build/EventSubtitles.app`
+Subtitles is built for live event operation: the main window keeps session controls, capture mode, audio level, Start/Stop, panic blank, and output-window actions within reach while the operator works in Live, Style, Glossary, Logs, Models, Translation, Audio, or Output workspaces.
+
+The app runs locally on Apple Silicon with WhisperKit/Core ML for live subtitles, optional Dutch/English translation paths, and a shared audio capture pipeline for metering, CAF recording, and ASR input. Capture modes cover real live subtitles, demo captions for screen checks, and audio-only recording.
+
+Public output is designed for readability rather than raw ASR speed. Calm Blocks and TV-style Live Roll-up modes separate draft text from stable on-screen captions, with line hold, idle flush, two/three-line wrapping, font/color controls, fine X/Y positioning, chroma green output, and emergency blanking.
+
+Event preparation and review are covered in-app: prepare offline models, manage an IT-conference glossary with validation and JSON/CSV import/export, prevent Mac sleep during active sessions, and save timestamped session folders with transcripts, SRT files, JSONL segments, glossary snapshots, and raw input audio.
 
 ## Run
 
@@ -86,13 +73,6 @@ Each session folder contains:
 - `input-audio.caf`
 
 `source-transcript.txt` is the spoken-word transcript. `display-transcript.txt` is what was shown on screen after glossary correction and optional translation. `source.srt` and `display.srt` are regenerated after every final segment with approximate timings. `draft.srt` mirrors the display SRT for quick review.
-
-## Test
-
-```bash
-swift run EventSubtitlesSmokeTests
-swift run EventSubtitlesCoreUnitTests
-```
 
 ## Model Plan
 
