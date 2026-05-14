@@ -39,6 +39,11 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
             centerOnMainScreen()
         }
         window?.makeKeyAndOrderFront(nil)
+        state.outputWindowDidUpdate(
+            isVisible: window?.isVisible ?? false,
+            isFilled: isFilled,
+            displayID: window?.screen.flatMap { AppState.screenID(for: $0) }
+        )
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -82,6 +87,7 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
 
         isFilled = true
         window.makeKeyAndOrderFront(nil)
+        state.outputWindowDidUpdate(isVisible: true, isFilled: true, displayID: AppState.screenID(for: target))
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -91,6 +97,12 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
         }
         resetWindowedState()
         centerOnMainScreen()
+        window?.makeKeyAndOrderFront(nil)
+        state.outputWindowDidUpdate(
+            isVisible: window?.isVisible ?? false,
+            isFilled: false,
+            displayID: window?.screen.flatMap { AppState.screenID(for: $0) }
+        )
     }
 
     private func resetWindowedState() {
@@ -119,6 +131,7 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         NSApp.presentationOptions = []
         isFilled = false
+        state.outputWindowDidUpdate(isVisible: false, isFilled: false, displayID: nil)
         window = nil
     }
 
@@ -136,7 +149,11 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
     }
 
     private func preferredOutputScreen() -> NSScreen? {
-        NSScreen.screens.first { $0 != NSScreen.main }
+        if let selectedOutputDisplayID = state.selectedOutputDisplayID,
+           let selected = NSScreen.screens.first(where: { AppState.screenID(for: $0) == selectedOutputDisplayID }) {
+            return selected
+        }
+        return NSScreen.screens.first { $0 != NSScreen.main }
     }
 
     private func createWindow() {

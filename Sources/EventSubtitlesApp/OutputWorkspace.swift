@@ -3,7 +3,6 @@ import SwiftUI
 
 struct OutputWorkspace: View {
     @Environment(AppState.self) private var state
-    @State private var selectedDisplay = 0
     @State private var outputMode: OutputWorkspaceMode = .window
 
     var body: some View {
@@ -50,11 +49,15 @@ struct OutputWorkspace: View {
 
     private var outputWindowPanel: some View {
         WorkspaceSection(title: "Output window") {
-            Picker("Display", selection: $selectedDisplay) {
-                Text("Built-in display").tag(0)
+            Picker("Display", selection: Binding(
+                get: { state.selectedOutputDisplay?.id ?? "" },
+                set: { state.selectOutputDisplay($0.isEmpty ? nil : $0) }
+            )) {
+                ForEach(state.outputDisplays) { display in
+                    Text("\(display.displayLabel) - \(display.frameDescription)")
+                        .tag(display.id)
+                }
             }
-            // TODO: enumerate NSScreen.screens here when explicit display selection is implemented.
-            .disabled(NSScreen.screens.count <= 1)
 
             Picker("Mode", selection: $outputMode) {
                 Text("Window").tag(OutputWorkspaceMode.window)
@@ -79,9 +82,26 @@ struct OutputWorkspace: View {
                     } label: {
                         Label("Restore window", systemImage: "arrow.down.right.and.arrow.up.left")
                     }
+
+                    Button {
+                        state.showOutputTestCard()
+                    } label: {
+                        Label("Show test card", systemImage: "rectangle.and.text.magnifyingglass")
+                    }
+
+                    Button {
+                        state.clearCaptions()
+                    } label: {
+                        Label("Clear captions", systemImage: "text.badge.xmark")
+                    }
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
                 }
+            }
+
+            LabeledContent("Status", value: state.outputStatusText)
+            if let display = state.selectedOutputDisplay {
+                LabeledContent("Selected", value: "\(display.displayLabel) - \(display.frameDescription)")
             }
         }
     }
