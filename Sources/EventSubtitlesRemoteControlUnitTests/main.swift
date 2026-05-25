@@ -246,6 +246,19 @@ private func testAudioStatusProjection() {
             isRunning: true,
             isDemo: false,
             hasAvailableInput: true,
+            audioLevel: 0,
+            lastAudibleInputAt: nil,
+            sessionStartedAt: now.addingTimeInterval(-10),
+            errorMessage: nil,
+            now: now
+        ) == .silent,
+        "a real session at the exact ten-second grace boundary should project as silent without signal"
+    )
+    expect(
+        StreamDeckStatusPolicy.audioState(
+            isRunning: true,
+            isDemo: false,
+            hasAvailableInput: true,
             audioLevel: 0.051,
             lastAudibleInputAt: nil,
             sessionStartedAt: pastGrace,
