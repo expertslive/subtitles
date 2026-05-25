@@ -22,7 +22,7 @@ public struct StreamDeckHello: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     public let pluginVersion: String
 
-    public init(protocolVersion: Int, pluginVersion: String) {
+    public init(protocolVersion: Int = streamDeckProtocolVersion, pluginVersion: String) {
         self.protocolVersion = protocolVersion
         self.pluginVersion = pluginVersion
     }
@@ -43,7 +43,7 @@ public struct StreamDeckCommandResult: Codable, Equatable, Sendable {
     public let accepted: Bool
     public let reason: StreamDeckRejectionReason?
 
-    public init(id: String, accepted: Bool, reason: StreamDeckRejectionReason?) {
+    public init(id: String, accepted: Bool, reason: StreamDeckRejectionReason? = nil) {
         self.id = id
         self.accepted = accepted
         self.reason = reason
@@ -143,7 +143,7 @@ public struct StreamDeckStatusMessage: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     public let status: StreamDeckStatusSnapshot
 
-    public init(protocolVersion: Int, status: StreamDeckStatusSnapshot) {
+    public init(protocolVersion: Int = streamDeckProtocolVersion, status: StreamDeckStatusSnapshot) {
         self.protocolVersion = protocolVersion
         self.status = status
     }

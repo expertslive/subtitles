@@ -50,9 +50,33 @@ private func testNilErrorSummaryEncodesAsExplicitNull() throws {
     expect(serializedStatus["errorSummary"] is NSNull, "nil errorSummary should serialize as JSON null")
 }
 
+private func testProtocolDefaultsAreAppliedByConvenienceInitializers() {
+    let snapshot = StreamDeckStatusSnapshot(
+        sessionState: .stopped,
+        elapsedText: "00:00:00",
+        displayState: .hidden,
+        outputState: .live,
+        captionState: .clear,
+        audioState: .unknown,
+        errorSummary: nil,
+        displayedSegmentCount: 0
+    )
+    let hello = StreamDeckHello(pluginVersion: "1.0.0")
+    let result = StreamDeckCommandResult(id: "ok", accepted: true)
+    let statusMessage = StreamDeckStatusMessage(status: snapshot)
+
+    expect(hello.protocolVersion == streamDeckProtocolVersion, "hello should use current protocol version by default")
+    expect(result.reason == nil, "accepted command result should default to no rejection reason")
+    expect(
+        statusMessage.protocolVersion == streamDeckProtocolVersion,
+        "status message should use current protocol version by default"
+    )
+}
+
 do {
     try testPanicBlankCommandMessageRoundTrips()
     try testNilErrorSummaryEncodesAsExplicitNull()
+    testProtocolDefaultsAreAppliedByConvenienceInitializers()
     print("PASS: Stream Deck remote control protocol")
 } catch {
     fputs("FAIL: Stream Deck remote control protocol: \(error)\n", stderr)
