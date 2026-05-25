@@ -43,10 +43,52 @@ public struct StreamDeckCommandResult: Codable, Equatable, Sendable {
     public let accepted: Bool
     public let reason: StreamDeckRejectionReason?
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case accepted
+        case reason
+    }
+
+    fileprivate static func isValid(accepted: Bool, reason: StreamDeckRejectionReason?) -> Bool {
+        accepted == (reason == nil)
+    }
+
     public init(id: String, accepted: Bool, reason: StreamDeckRejectionReason? = nil) {
+        precondition(
+            Self.isValid(accepted: accepted, reason: reason),
+            "Accepted command results must not have a rejection reason; rejected results must have one."
+        )
         self.id = id
         self.accepted = accepted
         self.reason = reason
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(String.self, forKey: .id)
+        let accepted = try container.decode(Bool.self, forKey: .accepted)
+        let reason = try container.decodeIfPresent(StreamDeckRejectionReason.self, forKey: .reason)
+        guard Self.isValid(accepted: accepted, reason: reason) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .accepted,
+                in: container,
+                debugDescription: "Accepted command results must not have a rejection reason; rejected results must have one."
+            )
+        }
+        self.id = id
+        self.accepted = accepted
+        self.reason = reason
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        precondition(
+            Self.isValid(accepted: accepted, reason: reason),
+            "Accepted command results must not have a rejection reason; rejected results must have one."
+        )
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(accepted, forKey: .accepted)
+        try container.encodeIfPresent(reason, forKey: .reason)
     }
 }
 
@@ -120,6 +162,27 @@ public struct StreamDeckStatusSnapshot: Codable, Equatable, Sendable {
         self.audioState = audioState
         self.errorSummary = errorSummary
         self.displayedSegmentCount = displayedSegmentCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.errorSummary) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.errorSummary,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "Status snapshots must include errorSummary as a string or null."
+                )
+            )
+        }
+        sessionState = try container.decode(StreamDeckSessionState.self, forKey: .sessionState)
+        elapsedText = try container.decode(String.self, forKey: .elapsedText)
+        displayState = try container.decode(StreamDeckDisplayState.self, forKey: .displayState)
+        outputState = try container.decode(StreamDeckOutputState.self, forKey: .outputState)
+        captionState = try container.decode(StreamDeckCaptionState.self, forKey: .captionState)
+        audioState = try container.decode(StreamDeckAudioState.self, forKey: .audioState)
+        errorSummary = try container.decodeIfPresent(String.self, forKey: .errorSummary)
+        displayedSegmentCount = try container.decode(Int.self, forKey: .displayedSegmentCount)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -223,11 +286,21 @@ public enum StreamDeckOutgoingMessage: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(MessageType.self, forKey: .type) {
         case .commandResult:
+            let id = try container.decode(String.self, forKey: .id)
+            let accepted = try container.decode(Bool.self, forKey: .accepted)
+            let reason = try container.decodeIfPresent(StreamDeckRejectionReason.self, forKey: .reason)
+            guard StreamDeckCommandResult.isValid(accepted: accepted, reason: reason) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .accepted,
+                    in: container,
+                    debugDescription: "Accepted command results must not have a rejection reason; rejected results must have one."
+                )
+            }
             self = .commandResult(
                 StreamDeckCommandResult(
-                    id: try container.decode(String.self, forKey: .id),
-                    accepted: try container.decode(Bool.self, forKey: .accepted),
-                    reason: try container.decodeIfPresent(StreamDeckRejectionReason.self, forKey: .reason)
+                    id: id,
+                    accepted: accepted,
+                    reason: reason
                 )
             )
         case .status:
@@ -244,6 +317,10 @@ public enum StreamDeckOutgoingMessage: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .commandResult(let message):
+            precondition(
+                StreamDeckCommandResult.isValid(accepted: message.accepted, reason: message.reason),
+                "Accepted command results must not have a rejection reason; rejected results must have one."
+            )
             try container.encode(MessageType.commandResult, forKey: .type)
             try container.encode(message.id, forKey: .id)
             try container.encode(message.accepted, forKey: .accepted)
