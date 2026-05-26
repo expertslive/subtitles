@@ -120,7 +120,7 @@ extension OperatorView {
                     ToolbarIconButton(
                         title: "Fill external display",
                         systemImage: "arrow.up.left.and.arrow.down.right",
-                        action: state.fillExternalDisplay
+                        action: { _ = state.fillExternalDisplay() }
                     )
 
                     ToolbarIconButton(

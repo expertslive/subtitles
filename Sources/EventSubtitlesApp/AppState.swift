@@ -43,6 +43,9 @@ final class AppState {
     var audioInputDescription = "Input unknown"
     var audioInputSelectionStatus = "Input unknown"
     var lastAudibleInputAt: Date?
+    var isSelectedAudioInputAvailable = false
+    var hasAudioCaptureFailure = false
+    var didFailToStartSession = false
     var engineStatus = "Simulator idle"
     var errorMessage: String?
     var sessionName = "Main stage"
@@ -148,9 +151,9 @@ final class AppState {
     @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
     @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     @ObservationIgnored private var outputController: OutputWindowController?
-    @ObservationIgnored private var sessionStartedAt: Date?
+    @ObservationIgnored var sessionStartedAt: Date?
     @ObservationIgnored private var lastCaptionSnapshotAt: Date?
-    @ObservationIgnored private var lastCaptionActivityAt: Date?
+    @ObservationIgnored var lastCaptionActivityAt: Date?
     /// Pixel width of the live output window's render area. Set by SubtitleOutputView
     /// when it has `governsLayout: true`. Drives the `effectiveTargetCharactersPerLine`
     /// calculation so each logical line fits on one visual row at the chosen font.
@@ -174,6 +177,8 @@ final class AppState {
             return
         }
 
+        didFailToStartSession = false
+        hasAudioCaptureFailure = false
         isStarting = true
         errorMessage = nil
         saveSettings()
@@ -210,6 +215,7 @@ final class AppState {
                 }
                 self.isRunning = true
                 self.isStarting = false
+                self.hasAudioCaptureFailure = false
                 self.engineStatus = self.transcriptionEngine.statusLabel
                 self.startSleepPreventionIfNeeded()
                 self.startSessionTimer()
@@ -251,6 +257,8 @@ final class AppState {
         audioLevel = 0
         isRunning = false
         isStarting = false
+        didFailToStartSession = true
+        hasAudioCaptureFailure = true
         engineStatus = transcriptionEngine.idleStatusLabel
         stopCaptionDisplayTimer()
         stopSleepPrevention()
@@ -295,11 +303,12 @@ final class AppState {
         outputController?.show()
     }
 
-    func fillExternalDisplay() {
+    @discardableResult
+    func fillExternalDisplay() -> Bool {
         if outputController == nil {
             outputController = OutputWindowController(state: self)
         }
-        outputController?.fillExternalDisplay()
+        return outputController?.fillExternalDisplay() ?? false
     }
 
     func restoreOutputWindow() {
@@ -611,6 +620,12 @@ final class AppState {
 
         audioInputDevices = devices
         effectiveAudioInputDeviceID = result.effectiveDeviceID
+        isSelectedAudioInputAvailable = result.effectiveDeviceID.map { effectiveID in
+            devices.contains(where: { $0.id == effectiveID })
+        } ?? false
+        if result.status == .overrideUnavailable {
+            isSelectedAudioInputAvailable = false
+        }
 
         if let effectiveDevice = devices.first(where: { $0.id == result.effectiveDeviceID }) {
             audioInputDescription = effectiveDevice.displayName
@@ -647,12 +662,14 @@ final class AppState {
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                     recordingURL: nil // Keep the active CAF writer instead of rotating files mid-session.
                 )
+                self.hasAudioCaptureFailure = false
                 self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
                 if priorDescription != self.audioInputDescription {
                     self.errorMessage = "Audio device changed: \(self.audioInputDescription)"
                 }
             } catch {
                 self.sessionLogger.error("Capture restart failed: \(error.localizedDescription)")
+                self.hasAudioCaptureFailure = true
                 self.engineStatus = "Capture restart failed"
                 self.errorMessage = "Audio capture restart failed: \(error.localizedDescription)"
             }

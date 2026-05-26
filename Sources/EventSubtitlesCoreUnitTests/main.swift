@@ -201,6 +201,100 @@ private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
     )
 }
 
+private func testStreamDeckAdapterUsesExplicitOutputCommands() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState+StreamDeck.swift") else {
+        fputs("FAIL: Stream Deck AppState adapter source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains("case .panicBlank:") &&
+            source.contains("panicBlank()") &&
+            source.contains("case .unblankOutput:") &&
+            source.contains("unblankOutput()") &&
+            source.contains("case .clearCaptions:") &&
+            source.contains("clearCaptions()"),
+        true,
+        "Stream Deck adapter should route safe output commands through explicit operations"
+    ) && expectEqual(
+        source.contains("toggleOutputBlank()"),
+        false,
+        "Stream Deck adapter should never toggle output blanking"
+    )
+}
+
+private func testStreamDeckFillRejectsUnavailableExternalDisplay() -> Bool {
+    guard let controller = readSource("Sources/EventSubtitlesApp/OutputWindowController.swift"),
+          let appState = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let adapter = readSource("Sources/EventSubtitlesApp/AppState+StreamDeck.swift")
+    else {
+        fputs("FAIL: output-fill sources should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        controller.contains("func fillExternalDisplay() -> Bool") &&
+            !controller.contains("preferredOutputScreen() ?? NSScreen.main") &&
+            controller.contains("selected != NSScreen.main") &&
+            controller.contains("return NSScreen.screens.first { $0 != NSScreen.main }"),
+        true,
+        "filled output should require a non-main external display"
+    ) && expectEqual(
+        appState.contains("func fillExternalDisplay() -> Bool") &&
+            adapter.contains("guard fillExternalDisplay() else") &&
+            adapter.contains("reason: .noExternalDisplay"),
+        true,
+        "Stream Deck fill command should reject when external fill cannot be performed"
+    )
+}
+
+private func testStreamDeckStatusUsesTypedStateFacts() -> Bool {
+    guard let adapter = readSource("Sources/EventSubtitlesApp/AppState+StreamDeck.swift") else {
+        fputs("FAIL: Stream Deck AppState adapter source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        adapter.contains("StreamDeckStatusPolicy.audioState(") &&
+            adapter.contains("isSelectedInputAvailable: isSelectedAudioInputAvailable") &&
+            adapter.contains("hasAudioFailure: hasAudioCaptureFailure") &&
+            adapter.contains("didFailToStartSession") &&
+            adapter.contains("StreamDeckStatusPolicy.captionState("),
+        true,
+        "status projection should pass typed AppState facts to Stream Deck policy"
+    ) && expectEqual(
+        adapter.contains("errorMessage.contains") ||
+            adapter.contains("errorMessage.localizedCaseInsensitiveContains") ||
+            adapter.contains("errorMessage.range"),
+        false,
+        "Stream Deck status should not classify state by searching error text"
+    )
+}
+
+private func testStreamDeckFailureFactsTrackCaptureLifecycle() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
+        fputs("FAIL: AppState source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains("var didFailToStartSession = false") &&
+            source.contains("var hasAudioCaptureFailure = false") &&
+            source.contains("var isSelectedAudioInputAvailable = false") &&
+            source.contains("didFailToStartSession = false") &&
+            source.contains("hasAudioCaptureFailure = false"),
+        true,
+        "AppState should own typed Stream Deck status facts and clear failures on start"
+    ) && expectEqual(
+        source.contains("didFailToStartSession = true") &&
+            source.contains("hasAudioCaptureFailure = true") &&
+            source.contains("self.hasAudioCaptureFailure = false") &&
+            source.contains("self.hasAudioCaptureFailure = true"),
+        true,
+        "capture start and restart paths should maintain typed failure facts"
+    )
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -214,7 +308,11 @@ let tests = [
     ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
     ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
-    ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop)
+    ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop),
+    ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
+    ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),
+    ("streamDeckStatusUsesTypedStateFacts", testStreamDeckStatusUsesTypedStateFacts),
+    ("streamDeckFailureFactsTrackCaptureLifecycle", testStreamDeckFailureFactsTrackCaptureLifecycle)
 ]
 
 var failed = 0
