@@ -24,14 +24,14 @@ public enum StreamDeckStatusPolicy {
     public static func audioState(
         isRunning: Bool,
         isDemo: Bool,
-        hasAvailableInput: Bool,
+        isSelectedInputAvailable: Bool,
+        hasAudioFailure: Bool,
         audioLevel: Double,
         lastAudibleInputAt: Date?,
         sessionStartedAt: Date?,
-        errorMessage: String?,
         now: Date
     ) -> StreamDeckAudioState {
-        if !hasAvailableInput || containsAudioFailure(errorMessage) {
+        if !isSelectedInputAvailable || hasAudioFailure {
             return .warning
         }
         guard isRunning, !isDemo else {
@@ -52,20 +52,11 @@ public enum StreamDeckStatusPolicy {
             return nil
         }
         let normalized = errorMessage
-            .components(separatedBy: .newlines)
+            .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
             return nil
         }
         return String(normalized.prefix(120))
-    }
-
-    private static func containsAudioFailure(_ errorMessage: String?) -> Bool {
-        guard let errorMessage else {
-            return false
-        }
-        let normalized = errorMessage.lowercased()
-        return normalized.contains("audio capture") || normalized.contains("audio input")
     }
 }

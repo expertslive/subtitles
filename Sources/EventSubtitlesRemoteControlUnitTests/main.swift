@@ -167,11 +167,11 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: false,
+            isSelectedInputAvailable: false,
+            hasAudioFailure: false,
             audioLevel: 1,
             lastAudibleInputAt: now,
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .warning,
         "a running session without audio input should project as warning"
@@ -180,37 +180,24 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: true,
             audioLevel: 1,
             lastAudibleInputAt: now,
             sessionStartedAt: pastGrace,
-            errorMessage: "Audio capture failed to start",
             now: now
         ) == .warning,
-        "an audio capture failure should project as warning"
-    )
-    expect(
-        StreamDeckStatusPolicy.audioState(
-            isRunning: true,
-            isDemo: false,
-            hasAvailableInput: true,
-            audioLevel: 1,
-            lastAudibleInputAt: now,
-            sessionStartedAt: pastGrace,
-            errorMessage: "Audio input is unavailable",
-            now: now
-        ) == .warning,
-        "an audio input failure should project as warning"
+        "a typed audio failure should project as warning"
     )
     expect(
         StreamDeckStatusPolicy.audioState(
             isRunning: false,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 1,
             lastAudibleInputAt: now,
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .unknown,
         "stopped sessions should project audio state as unknown"
@@ -219,11 +206,11 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: true,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 1,
             lastAudibleInputAt: now,
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .unknown,
         "demo sessions should project audio state as unknown"
@@ -232,11 +219,11 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 0,
             lastAudibleInputAt: nil,
             sessionStartedAt: now.addingTimeInterval(-9),
-            errorMessage: nil,
             now: now
         ) == .unknown,
         "a real session within its initial grace period should project as unknown without signal"
@@ -245,11 +232,11 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 0,
             lastAudibleInputAt: nil,
             sessionStartedAt: now.addingTimeInterval(-10),
-            errorMessage: nil,
             now: now
         ) == .silent,
         "a real session at the exact ten-second grace boundary should project as silent without signal"
@@ -258,11 +245,11 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 0.051,
             lastAudibleInputAt: nil,
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .healthy,
         "a current level above the threshold should project as healthy"
@@ -271,11 +258,11 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 0.05,
             lastAudibleInputAt: nil,
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .silent,
         "a current level at the exact threshold should not count as signal"
@@ -284,11 +271,11 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 0,
             lastAudibleInputAt: now.addingTimeInterval(-9.999),
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .healthy,
         "audible input less than ten seconds ago should project as healthy"
@@ -297,24 +284,39 @@ private func testAudioStatusProjection() {
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 0,
             lastAudibleInputAt: nil,
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .silent,
         "a real running session past grace with no signal should project as silent"
+    )
+    let nonAudioErrorMessage = "Translation failed for selected language"
+    expect(StreamDeckStatusPolicy.errorSummary(nonAudioErrorMessage) != nil, "non-audio errors should remain displayable")
+    expect(
+        StreamDeckStatusPolicy.audioState(
+            isRunning: true,
+            isDemo: false,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
+            audioLevel: 0,
+            lastAudibleInputAt: nil,
+            sessionStartedAt: pastGrace,
+            now: now
+        ) == .silent,
+        "a displayable non-audio error without a typed audio failure should not project as warning"
     )
     expect(
         StreamDeckStatusPolicy.audioState(
             isRunning: true,
             isDemo: false,
-            hasAvailableInput: true,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
             audioLevel: 0,
             lastAudibleInputAt: now.addingTimeInterval(-10),
             sessionStartedAt: pastGrace,
-            errorMessage: nil,
             now: now
         ) == .silent,
         "audible input at the exact ten-second boundary should not count as recent"
@@ -325,9 +327,9 @@ private func testErrorSummaryProjection() {
     expect(StreamDeckStatusPolicy.errorSummary(nil) == nil, "nil error summaries should remain nil")
     expect(StreamDeckStatusPolicy.errorSummary(" \n\t ") == nil, "whitespace-only error summaries should be omitted")
     expect(
-        StreamDeckStatusPolicy.errorSummary("  Audio capture failed\nTry another input  ") ==
+        StreamDeckStatusPolicy.errorSummary("  Audio\t capture \n\n failed\t Try   another input  ") ==
             "Audio capture failed Try another input",
-        "error summaries should normalize newlines and trim whitespace"
+        "error summaries should collapse whitespace runs and trim whitespace"
     )
     let longMessage = String(repeating: "x", count: 121)
     expect(
