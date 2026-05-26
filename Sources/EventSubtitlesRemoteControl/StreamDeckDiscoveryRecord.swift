@@ -52,7 +52,7 @@ public struct StreamDeckDiscoveryStore: Sendable {
         var coordinationError: NSError?
         NSFileCoordinator().coordinate(
             writingItemAt: recordURL,
-            options: .forReplacing,
+            options: [],
             error: &coordinationError
         ) { coordinatedURL in
             do {
@@ -120,11 +120,11 @@ public struct StreamDeckDiscoveryStore: Sendable {
     }
 
     private static func timestampString(from date: Date) -> String {
-        let wholeSeconds = floor(date.timeIntervalSince1970)
-        let fraction = date.timeIntervalSince1970 - wholeSeconds
+        let wholeSeconds = floor(date.timeIntervalSinceReferenceDate)
+        let fraction = date.timeIntervalSinceReferenceDate - wholeSeconds
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        let base = formatter.string(from: Date(timeIntervalSince1970: wholeSeconds))
+        let base = formatter.string(from: Date(timeIntervalSinceReferenceDate: wholeSeconds))
         guard fraction != 0 else {
             return base
         }
@@ -141,22 +141,33 @@ public struct StreamDeckDiscoveryStore: Sendable {
     private static func date(from value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        if let wholeSecondDate = formatter.date(from: value) {
-            return wholeSecondDate
+
+        guard let decimalPoint = value.lastIndex(of: ".") else {
+            return formatter.date(from: value)
+        }
+        guard value.hasSuffix("Z") else {
+            return nil
         }
 
-        guard value.hasSuffix("Z"),
-              let decimalPoint = value.lastIndex(of: ".")
-        else {
+        let fractionStart = value.index(after: decimalPoint)
+        let fractionEnd = value.index(before: value.endIndex)
+        guard fractionStart < fractionEnd else {
             return nil
         }
+        let fractionalDigits = value[fractionStart..<fractionEnd]
+        guard fractionalDigits.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else {
+            return nil
+        }
+
         let wholeSecondValue = String(value[..<decimalPoint]) + "Z"
-        let fractionalValue = String(value[decimalPoint..<value.index(before: value.endIndex)])
+        let fractionalValue = "0." + fractionalDigits
         guard let wholeSecondDate = formatter.date(from: wholeSecondValue),
-              let fraction = TimeInterval(fractionalValue)
+              let fraction = TimeInterval(fractionalValue),
+              fraction >= 0,
+              fraction < 1
         else {
             return nil
         }
-        return Date(timeIntervalSince1970: wholeSecondDate.timeIntervalSince1970 + fraction)
+        return Date(timeIntervalSinceReferenceDate: wholeSecondDate.timeIntervalSinceReferenceDate + fraction)
     }
 }

@@ -197,6 +197,46 @@ private func testDiscoveryRecordReadsWholeSecondISO8601JSON() throws {
     )
 }
 
+private func testDiscoveryRecordExactlyRoundTripsContemporaryReferenceDate() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    let record = StreamDeckDiscoveryRecord(
+        host: "localhost",
+        port: 9_999,
+        processID: 101,
+        generatedAt: Date(timeIntervalSinceReferenceDate: 800_000_000.123456.nextUp)
+    )
+
+    try store.write(record)
+
+    expect(
+        try store.read() == record,
+        "discovery record should exactly round trip a contemporary reference-date timestamp"
+    )
+}
+
+private func testDiscoveryRecordRejectsNonDecimalFraction() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    try Data(
+        #"{"generatedAt":"2023-11-14T22:13:20.1e3Z","host":"127.0.0.1","port":43123,"processID":4242,"protocolVersion":1}"#.utf8
+    ).write(to: store.recordURL)
+
+    do {
+        _ = try store.read()
+        expect(false, "non-decimal discovery timestamp fractions should fail decoding")
+    } catch {
+        // Expected: fractional timestamps only permit decimal digits.
+    }
+}
+
 private func testDiscoveryRecordRemovalRequiresMatchingProcessID() throws {
     let rootURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
@@ -535,6 +575,8 @@ do {
     testDiscoveryRecordURLIsDeterministic()
     try testDiscoveryRecordWritesSortedFractionalISO8601JSON()
     try testDiscoveryRecordReadsWholeSecondISO8601JSON()
+    try testDiscoveryRecordExactlyRoundTripsContemporaryReferenceDate()
+    try testDiscoveryRecordRejectsNonDecimalFraction()
     try testDiscoveryRecordRemovalRequiresMatchingProcessID()
     testDiscoveryRecordUsesCurrentProtocolVersionByDefault()
     try testMalformedDiscoveryRecordThrowsWhenRead()
