@@ -218,6 +218,51 @@ private func testDiscoveryRecordExactlyRoundTripsContemporaryReferenceDate() thr
     )
 }
 
+private func testDiscoveryRecordExactlyRoundTripsImmediatelyBeforeWholeSecond() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    let record = StreamDeckDiscoveryRecord(
+        host: "localhost",
+        port: 9_999,
+        processID: 101,
+        generatedAt: Date(timeIntervalSinceReferenceDate: 1.0.nextDown)
+    )
+
+    try store.write(record)
+    let json = try String(contentsOf: store.recordURL, encoding: .utf8)
+
+    expect(!json.contains(".Z\""), "discovery timestamp should not emit an empty fraction")
+    expect(
+        try store.read() == record,
+        "discovery record should exactly round trip immediately below a whole-second boundary"
+    )
+}
+
+private func testDiscoveryRecordEncodesTinyFractionWithoutExponentNotation() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    let record = StreamDeckDiscoveryRecord(
+        host: "localhost",
+        port: 9_999,
+        processID: 101,
+        generatedAt: Date(timeIntervalSinceReferenceDate: .leastNonzeroMagnitude)
+    )
+
+    try store.write(record)
+    let data = try Data(contentsOf: store.recordURL)
+    let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let timestamp = object?["generatedAt"] as? String
+
+    expect(timestamp?.contains("e") == false, "discovery timestamp fractions should not use exponent notation")
+    expect(try store.read() == record, "discovery record should exactly round trip a tiny fractional timestamp")
+}
+
 private func testDiscoveryRecordRejectsNonDecimalFraction() throws {
     let rootURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
@@ -576,6 +621,8 @@ do {
     try testDiscoveryRecordWritesSortedFractionalISO8601JSON()
     try testDiscoveryRecordReadsWholeSecondISO8601JSON()
     try testDiscoveryRecordExactlyRoundTripsContemporaryReferenceDate()
+    try testDiscoveryRecordExactlyRoundTripsImmediatelyBeforeWholeSecond()
+    try testDiscoveryRecordEncodesTinyFractionWithoutExponentNotation()
     try testDiscoveryRecordRejectsNonDecimalFraction()
     try testDiscoveryRecordRemovalRequiresMatchingProcessID()
     testDiscoveryRecordUsesCurrentProtocolVersionByDefault()

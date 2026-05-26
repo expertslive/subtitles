@@ -129,13 +129,29 @@ public struct StreamDeckDiscoveryStore: Sendable {
             return base
         }
 
-        let rawFraction = String(format: "%.17f", locale: Locale(identifier: "en_US_POSIX"), fraction)
-        let digits = String(rawFraction.dropFirst(2)).replacingOccurrences(
-            of: "0+$",
-            with: "",
-            options: .regularExpression
-        )
+        let digits = fractionalDigits(from: fraction)
         return base.replacingOccurrences(of: "Z", with: ".\(digits)Z")
+    }
+
+    private static func fractionalDigits(from fraction: TimeInterval) -> String {
+        let representation = String(fraction)
+        if representation.hasPrefix("0.") {
+            return String(representation.dropFirst(2))
+        }
+
+        let parts = representation.lowercased().split(separator: "e", maxSplits: 1)
+        precondition(parts.count == 2, "A nonzero fraction below one must be decimal or scientific notation.")
+
+        let mantissaParts = parts[0].split(separator: ".", omittingEmptySubsequences: false)
+        let mantissaDigits = mantissaParts.joined()
+        let integerDigitCount = mantissaParts[0].count
+        guard let exponent = Int(parts[1]) else {
+            preconditionFailure("The fractional exponent must be numeric.")
+        }
+
+        let decimalPosition = integerDigitCount + exponent
+        precondition(decimalPosition <= 0, "A fraction below one cannot have integer digits.")
+        return String(repeating: "0", count: -decimalPosition) + mantissaDigits
     }
 
     private static func date(from value: String) -> Date? {
