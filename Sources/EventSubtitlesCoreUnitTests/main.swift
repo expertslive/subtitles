@@ -186,6 +186,26 @@ private func testAppStateStartOnlyRunsSessionAfterCaptureSucceeds() -> Bool {
     )
 }
 
+private func testAppStateCanceledStartDoesNotRecordFailure() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let failureHandler = source.range(
+            of: "self.handleCaptureStartFailure(error)",
+            range: captureStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState capture-start failure markers should exist\n", stderr)
+        return false
+    }
+
+    let failurePath = source[captureStart.upperBound..<failureHandler.lowerBound]
+    return expectEqual(
+        failurePath.contains("guard self.isStarting else { return }"),
+        true,
+        "canceled capture startup should not be recorded as a session-start failure"
+    )
+}
+
 private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
     guard let source = readSource("Sources/EventSubtitlesApp/AppDelegate.swift") else {
         fputs("FAIL: AppDelegate source should be readable\n", stderr)
@@ -308,6 +328,7 @@ let tests = [
     ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
     ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
+    ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
     ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop),
     ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
     ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),

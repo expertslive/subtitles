@@ -223,6 +223,7 @@ final class AppState {
                 self.refreshResourceUsage()
                 self.startTranscriptionEngine()
             } catch {
+                guard self.isStarting else { return }
                 self.sessionLogger.error("Audio capture start failed: \(error.localizedDescription)")
                 self.handleCaptureStartFailure(error)
             }
