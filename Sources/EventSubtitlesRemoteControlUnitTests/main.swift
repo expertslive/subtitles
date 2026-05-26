@@ -235,6 +235,19 @@ private func testAudioStatusProjection() {
             isSelectedInputAvailable: true,
             hasAudioFailure: false,
             audioLevel: 0,
+            lastAudibleInputAt: now.addingTimeInterval(-3),
+            sessionStartedAt: now.addingTimeInterval(-2),
+            now: now
+        ) == .unknown,
+        "audible input before the current session started should not make its initial grace healthy"
+    )
+    expect(
+        StreamDeckStatusPolicy.audioState(
+            isRunning: true,
+            isDemo: false,
+            isSelectedInputAvailable: true,
+            hasAudioFailure: false,
+            audioLevel: 0,
             lastAudibleInputAt: nil,
             sessionStartedAt: now.addingTimeInterval(-10),
             now: now

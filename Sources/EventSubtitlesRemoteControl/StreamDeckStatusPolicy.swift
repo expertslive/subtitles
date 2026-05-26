@@ -37,8 +37,12 @@ public enum StreamDeckStatusPolicy {
         guard isRunning, !isDemo else {
             return .unknown
         }
+        let heardRecently = lastAudibleInputAt.map { audibleAt in
+            let isInCurrentSession = sessionStartedAt.map { audibleAt >= $0 } ?? true
+            return isInCurrentSession && now.timeIntervalSince(audibleAt) < audioGraceDuration
+        } ?? false
         if audioLevel > audioSignalThreshold ||
-            lastAudibleInputAt.map({ now.timeIntervalSince($0) < audioGraceDuration }) == true {
+            heardRecently {
             return .healthy
         }
         if sessionStartedAt.map({ now.timeIntervalSince($0) < audioGraceDuration }) == true {
