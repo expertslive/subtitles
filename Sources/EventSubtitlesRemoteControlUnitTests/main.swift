@@ -136,7 +136,7 @@ private func testDiscoveryRecordRoundTripsAndCreatesIntermediateDirectory() thro
         port: 43123,
         protocolVersion: 7,
         processID: 4_242,
-        generatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        generatedAt: Date(timeIntervalSince1970: 1_700_000_000.123456)
     )
 
     expect(!FileManager.default.fileExists(atPath: directoryURL.path), "discovery directory should begin absent")
@@ -145,6 +145,56 @@ private func testDiscoveryRecordRoundTripsAndCreatesIntermediateDirectory() thro
 
     expect(FileManager.default.fileExists(atPath: store.recordURL.path), "writing discovery should create nested directory and file")
     expect(try store.read() == record, "discovery record should round trip through JSON")
+}
+
+private func testDiscoveryRecordURLIsDeterministic() {
+    let directoryURL = URL(fileURLWithPath: "/tmp/discovery-location", isDirectory: true)
+    let store = StreamDeckDiscoveryStore(directoryURL: directoryURL)
+
+    expect(
+        store.recordURL == directoryURL.appendingPathComponent("streamdeck-control.json"),
+        "discovery record should use the streamdeck-control.json filename"
+    )
+}
+
+private func testDiscoveryRecordWritesSortedFractionalISO8601JSON() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    try store.write(
+        StreamDeckDiscoveryRecord(
+            host: "127.0.0.1",
+            port: 43123,
+            protocolVersion: 1,
+            processID: 4_242,
+            generatedAt: Date(timeIntervalSince1970: 1_700_000_000.125)
+        )
+    )
+    let json = try String(contentsOf: store.recordURL, encoding: .utf8)
+
+    expect(
+        json == #"{"generatedAt":"2023-11-14T22:13:20.125Z","host":"127.0.0.1","port":43123,"processID":4242,"protocolVersion":1}"#,
+        "discovery record should use sorted keys and fractional ISO-8601 timestamps"
+    )
+}
+
+private func testDiscoveryRecordReadsWholeSecondISO8601JSON() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    try Data(
+        #"{"generatedAt":"2023-11-14T22:13:20Z","host":"127.0.0.1","port":43123,"processID":4242,"protocolVersion":1}"#.utf8
+    ).write(to: store.recordURL)
+
+    expect(
+        try store.read()?.generatedAt == Date(timeIntervalSince1970: 1_700_000_000),
+        "discovery store should read previously written whole-second ISO-8601 timestamps"
+    )
 }
 
 private func testDiscoveryRecordRemovalRequiresMatchingProcessID() throws {
@@ -482,6 +532,9 @@ do {
     try testStatusMessageRoundTrips()
     testProtocolDefaultsAreAppliedByConvenienceInitializers()
     try testDiscoveryRecordRoundTripsAndCreatesIntermediateDirectory()
+    testDiscoveryRecordURLIsDeterministic()
+    try testDiscoveryRecordWritesSortedFractionalISO8601JSON()
+    try testDiscoveryRecordReadsWholeSecondISO8601JSON()
     try testDiscoveryRecordRemovalRequiresMatchingProcessID()
     testDiscoveryRecordUsesCurrentProtocolVersionByDefault()
     try testMalformedDiscoveryRecordThrowsWhenRead()

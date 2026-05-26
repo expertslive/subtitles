@@ -41,28 +41,122 @@ public struct StreamDeckDiscoveryStore: Sendable {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(Self.timestampString(from: date))
+        }
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(record)
-        try data.write(to: recordURL, options: .atomic)
+
+        var operationError: Error?
+        var coordinationError: NSError?
+        NSFileCoordinator().coordinate(
+            writingItemAt: recordURL,
+            options: .forReplacing,
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                try data.write(to: coordinatedURL, options: .atomic)
+            } catch {
+                operationError = error
+            }
+        }
+        if let operationError {
+            throw operationError
+        }
+        if let coordinationError {
+            throw coordinationError
+        }
     }
 
     public func read() throws -> StreamDeckDiscoveryRecord? {
-        guard FileManager.default.fileExists(atPath: recordURL.path) else {
-            return nil
-        }
-
-        let data = try Data(contentsOf: recordURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(StreamDeckDiscoveryRecord.self, from: data)
+        try Self.read(from: recordURL)
     }
 
     public func removeIfOwned(by processID: Int32) throws {
-        guard let record = try read(), record.processID == processID else {
-            return
+        var operationError: Error?
+        var coordinationError: NSError?
+        NSFileCoordinator().coordinate(
+            writingItemAt: recordURL,
+            options: .forDeleting,
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                guard let record = try Self.read(from: coordinatedURL),
+                      record.processID == processID
+                else {
+                    return
+                }
+                try FileManager.default.removeItem(at: coordinatedURL)
+            } catch {
+                operationError = error
+            }
+        }
+        if let operationError {
+            throw operationError
+        }
+        if let coordinationError {
+            throw coordinationError
+        }
+    }
+
+    private static func read(from url: URL) throws -> StreamDeckDiscoveryRecord? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
         }
 
-        try FileManager.default.removeItem(at: recordURL)
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let value = try decoder.singleValueContainer().decode(String.self)
+            guard let date = Self.date(from: value) else {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: "Invalid ISO-8601 date.")
+                )
+            }
+            return date
+        }
+        return try decoder.decode(StreamDeckDiscoveryRecord.self, from: data)
+    }
+
+    private static func timestampString(from date: Date) -> String {
+        let wholeSeconds = floor(date.timeIntervalSince1970)
+        let fraction = date.timeIntervalSince1970 - wholeSeconds
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let base = formatter.string(from: Date(timeIntervalSince1970: wholeSeconds))
+        guard fraction != 0 else {
+            return base
+        }
+
+        let rawFraction = String(format: "%.17f", locale: Locale(identifier: "en_US_POSIX"), fraction)
+        let digits = String(rawFraction.dropFirst(2)).replacingOccurrences(
+            of: "0+$",
+            with: "",
+            options: .regularExpression
+        )
+        return base.replacingOccurrences(of: "Z", with: ".\(digits)Z")
+    }
+
+    private static func date(from value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        if let wholeSecondDate = formatter.date(from: value) {
+            return wholeSecondDate
+        }
+
+        guard value.hasSuffix("Z"),
+              let decimalPoint = value.lastIndex(of: ".")
+        else {
+            return nil
+        }
+        let wholeSecondValue = String(value[..<decimalPoint]) + "Z"
+        let fractionalValue = String(value[decimalPoint..<value.index(before: value.endIndex)])
+        guard let wholeSecondDate = formatter.date(from: wholeSecondValue),
+              let fraction = TimeInterval(fractionalValue)
+        else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: wholeSecondDate.timeIntervalSince1970 + fraction)
     }
 }
