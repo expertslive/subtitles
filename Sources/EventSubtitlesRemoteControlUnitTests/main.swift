@@ -124,6 +124,76 @@ private func testProtocolDefaultsAreAppliedByConvenienceInitializers() {
     )
 }
 
+private func testDiscoveryRecordRoundTripsAndCreatesIntermediateDirectory() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let directoryURL = rootURL.appendingPathComponent("nested/discovery", isDirectory: true)
+    let store = StreamDeckDiscoveryStore(directoryURL: directoryURL)
+    let record = StreamDeckDiscoveryRecord(
+        host: "127.0.0.1",
+        port: 43123,
+        protocolVersion: 7,
+        processID: 4_242,
+        generatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+
+    expect(!FileManager.default.fileExists(atPath: directoryURL.path), "discovery directory should begin absent")
+
+    try store.write(record)
+
+    expect(FileManager.default.fileExists(atPath: store.recordURL.path), "writing discovery should create nested directory and file")
+    expect(try store.read() == record, "discovery record should round trip through JSON")
+}
+
+private func testDiscoveryRecordRemovalRequiresMatchingProcessID() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    let record = StreamDeckDiscoveryRecord(
+        host: "localhost",
+        port: 9_999,
+        processID: 101,
+        generatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    try store.write(record)
+
+    try store.removeIfOwned(by: 202)
+    expect(try store.read() == record, "a different process ID should not remove the discovery record")
+
+    try store.removeIfOwned(by: 101)
+    expect(try store.read() == nil, "the owning process ID should remove the discovery record")
+}
+
+private func testDiscoveryRecordUsesCurrentProtocolVersionByDefault() {
+    let record = StreamDeckDiscoveryRecord(host: "localhost", port: 9_999, processID: 101)
+
+    expect(
+        record.protocolVersion == streamDeckProtocolVersion,
+        "discovery record should use current protocol version by default"
+    )
+}
+
+private func testMalformedDiscoveryRecordThrowsWhenRead() throws {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let store = StreamDeckDiscoveryStore(directoryURL: rootURL)
+    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    try Data("{ malformed json".utf8).write(to: store.recordURL)
+
+    do {
+        _ = try store.read()
+        expect(false, "malformed discovery JSON should throw during read")
+    } catch {
+        // Expected: an existing malformed record is not equivalent to an absent record.
+    }
+}
+
 private func testCaptionStatusProjection() {
     let now = Date(timeIntervalSinceReferenceDate: 100)
 
@@ -411,6 +481,10 @@ do {
     try testNilErrorSummaryEncodesAsExplicitNull()
     try testStatusMessageRoundTrips()
     testProtocolDefaultsAreAppliedByConvenienceInitializers()
+    try testDiscoveryRecordRoundTripsAndCreatesIntermediateDirectory()
+    try testDiscoveryRecordRemovalRequiresMatchingProcessID()
+    testDiscoveryRecordUsesCurrentProtocolVersionByDefault()
+    try testMalformedDiscoveryRecordThrowsWhenRead()
     testCaptionStatusProjection()
     testAudioStatusProjection()
     testErrorSummaryProjection()
