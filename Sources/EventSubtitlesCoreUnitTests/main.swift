@@ -378,6 +378,43 @@ private func testAudioCapturePipelineBindsInstalledCallbacksToGeneration() -> Bo
     )
 }
 
+private func testAudioCapturePipelineCleansUpPartialStartResources() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AudioCapturePipeline.swift"),
+          let startLocked = source.range(of: "private func startLocked"),
+          let stopLocked = source.range(of: "private func stopLocked"),
+          let restart = source.range(of: "func restart(", range: stopLocked.upperBound..<source.endIndex),
+          let cleanup = source.range(of: "private func cleanupCaptureResourcesLocked")
+    else {
+        fputs("FAIL: audio capture partial-start cleanup markers should exist\n", stderr)
+        return false
+    }
+
+    let startPath = source[startLocked.lowerBound..<stopLocked.lowerBound]
+    let stopPath = source[stopLocked.lowerBound..<restart.lowerBound]
+    let cleanupPath = source[cleanup.lowerBound..<source.endIndex]
+    return expectEqual(
+        source.contains("private var captureResourcesInstalled = false") &&
+            startPath.contains("do {") &&
+            startPath.contains("captureResourcesInstalled = true") &&
+            startPath.contains("catch {") &&
+            startPath.contains("cleanupCaptureResourcesLocked(keepRecordingFile: preserveExistingRecording)") &&
+            stopPath.contains("cleanupCaptureResourcesLocked(keepRecordingFile: keepRecordingFile)") &&
+            cleanupPath.contains("engine.inputNode.removeTap(onBus: 0)") &&
+            cleanupPath.contains("engine.stop()") &&
+            cleanupPath.contains("converter = nil") &&
+            cleanupPath.contains("recordingFile = nil") &&
+            cleanupPath.contains("NotificationCenter.default.removeObserver(configChangeObserver)") &&
+            cleanupPath.contains("removeDefaultInputDeviceListener()") &&
+            cleanupPath.contains("levelHandler = nil") &&
+            cleanupPath.contains("samplesHandler = nil") &&
+            cleanupPath.contains("onConfigurationDidChange = nil") &&
+            cleanupPath.contains("activeDeliveryGeneration = nil") &&
+            cleanupPath.contains("captureResourcesInstalled = false"),
+        true,
+        "partial start failures and non-running stops should clean installed capture resources"
+    )
+}
+
 private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
     guard let source = readSource("Sources/EventSubtitlesApp/AppDelegate.swift") else {
         fputs("FAIL: AppDelegate source should be readable\n", stderr)
@@ -506,6 +543,7 @@ let tests = [
     ("appStateScopesConfigurationRestartToRunningSession", testAppStateScopesConfigurationRestartToRunningSession),
     ("appStateScopesAudioCallbacksToRunningSession", testAppStateScopesAudioCallbacksToRunningSession),
     ("audioCapturePipelineBindsInstalledCallbacksToGeneration", testAudioCapturePipelineBindsInstalledCallbacksToGeneration),
+    ("audioCapturePipelineCleansUpPartialStartResources", testAudioCapturePipelineCleansUpPartialStartResources),
     ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop),
     ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
     ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),

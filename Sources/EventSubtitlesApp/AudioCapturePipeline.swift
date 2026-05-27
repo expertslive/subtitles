@@ -41,6 +41,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
     private var recordingFile: AVAudioFile?
     private var running = false
     private var activeDeliveryGeneration: UInt64?
+    private var captureResourcesInstalled = false
     private var converter: AVAudioConverter?
 
     private let whisperFormat: AVAudioFormat = {
@@ -130,56 +131,62 @@ final class AudioCapturePipeline: @unchecked Sendable {
             stopLocked(keepRecordingFile: preserveExistingRecording)
         }
 
-        levelHandler = onLevel
-        samplesHandler = onSamples
-        onConfigurationDidChange = onConfigurationChange
+        do {
+            levelHandler = onLevel
+            samplesHandler = onSamples
+            onConfigurationDidChange = onConfigurationChange
 
-        if let inputDeviceID {
-            try setInputDevice(inputDeviceID)
-        }
+            if let inputDeviceID {
+                try setInputDevice(inputDeviceID)
+            }
 
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
-            throw AudioCapturePipelineError.inputUnavailable
-        }
+            let inputNode = engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+            guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
+                throw AudioCapturePipelineError.inputUnavailable
+            }
 
-        guard let converter = AVAudioConverter(from: inputFormat, to: whisperFormat) else {
-            throw AudioCapturePipelineError.recordingUnavailable(
-                "Cannot convert from \(inputFormat) to 16 kHz mono Float32."
-            )
-        }
-        self.converter = converter
+            guard let converter = AVAudioConverter(from: inputFormat, to: whisperFormat) else {
+                throw AudioCapturePipelineError.recordingUnavailable(
+                    "Cannot convert from \(inputFormat) to 16 kHz mono Float32."
+                )
+            }
+            self.converter = converter
 
-        if let recordingURL {
-            recordingFile = try openRecordingFile(at: recordingURL)
-        } else if !preserveExistingRecording {
-            recordingFile = nil
-        }
-        let installedRecordingFile = recordingFile
+            if let recordingURL {
+                recordingFile = try openRecordingFile(at: recordingURL)
+            } else if !preserveExistingRecording {
+                recordingFile = nil
+            }
+            let installedRecordingFile = recordingFile
 
-        let bufferSize: AVAudioFrameCount = 1024
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
-            self?.handleBuffer(
-                buffer,
-                operationGeneration: operationGeneration,
-                converter: converter,
-                recordingFile: installedRecordingFile,
-                onLevel: onLevel,
-                onSamples: onSamples
-            )
-        }
+            let bufferSize: AVAudioFrameCount = 1024
+            inputNode.removeTap(onBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
+                self?.handleBuffer(
+                    buffer,
+                    operationGeneration: operationGeneration,
+                    converter: converter,
+                    recordingFile: installedRecordingFile,
+                    onLevel: onLevel,
+                    onSamples: onSamples
+                )
+            }
 
-        installConfigChangeObserver(onConfigurationChange)
-        installDefaultInputDeviceListener(onConfigurationChange)
+            installConfigChangeObserver(onConfigurationChange)
+            installDefaultInputDeviceListener(onConfigurationChange)
+            captureResourcesInstalled = true
 
-        engine.prepare()
-        try engine.start()
+            engine.prepare()
+            try engine.start()
 
-        stateLock.withLock {
-            running = true
-            activeDeliveryGeneration = operationGeneration
+            stateLock.withLock {
+                running = true
+                activeDeliveryGeneration = operationGeneration
+            }
+        } catch {
+            cleanupCaptureResourcesLocked(keepRecordingFile: preserveExistingRecording)
+            throw error
         }
     }
 
@@ -191,21 +198,19 @@ final class AudioCapturePipeline: @unchecked Sendable {
     }
 
     private func stopLocked(keepRecordingFile: Bool) {
-        stateLock.lock()
-        guard running else {
-            activeDeliveryGeneration = nil
-            stateLock.unlock()
-            if !keepRecordingFile {
-                recordingFile = nil
-            }
-            return
-        }
-        running = false
-        activeDeliveryGeneration = nil
-        stateLock.unlock()
+        cleanupCaptureResourcesLocked(keepRecordingFile: keepRecordingFile)
+    }
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+    private func cleanupCaptureResourcesLocked(keepRecordingFile: Bool) {
+        stateLock.withLock {
+            running = false
+            activeDeliveryGeneration = nil
+        }
+
+        if captureResourcesInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         converter = nil
 
         let drained = recordingFile
@@ -225,7 +230,10 @@ final class AudioCapturePipeline: @unchecked Sendable {
             removeDefaultInputDeviceListener()
         }
 
+        levelHandler = nil
         samplesHandler = nil
+        onConfigurationDidChange = nil
+        captureResourcesInstalled = false
     }
 
     func restart(
