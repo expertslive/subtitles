@@ -151,6 +151,7 @@ final class AppState {
     @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
     @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     @ObservationIgnored private var outputController: OutputWindowController?
+    @ObservationIgnored private var activeCaptureStartAttempt: UUID?
     @ObservationIgnored var sessionStartedAt: Date?
     @ObservationIgnored private var lastCaptionSnapshotAt: Date?
     @ObservationIgnored var lastCaptionActivityAt: Date?
@@ -177,6 +178,8 @@ final class AppState {
             return
         }
 
+        let startAttemptID = UUID()
+        activeCaptureStartAttempt = startAttemptID
         didFailToStartSession = false
         hasAudioCaptureFailure = false
         isStarting = true
@@ -209,10 +212,18 @@ final class AppState {
                         }
                     }
                 )
+                guard self.activeCaptureStartAttempt == startAttemptID else {
+                    if self.activeCaptureStartAttempt == nil && !self.isRunning {
+                        self.capturePipeline.stop()
+                    }
+                    return
+                }
                 guard self.isStarting else {
+                    self.activeCaptureStartAttempt = nil
                     self.capturePipeline.stop()
                     return
                 }
+                self.activeCaptureStartAttempt = nil
                 self.isRunning = true
                 self.isStarting = false
                 self.hasAudioCaptureFailure = false
@@ -223,7 +234,9 @@ final class AppState {
                 self.refreshResourceUsage()
                 self.startTranscriptionEngine()
             } catch {
+                guard self.activeCaptureStartAttempt == startAttemptID else { return }
                 guard self.isStarting else { return }
+                self.activeCaptureStartAttempt = nil
                 self.sessionLogger.error("Audio capture start failed: \(error.localizedDescription)")
                 self.handleCaptureStartFailure(error)
             }
@@ -233,6 +246,9 @@ final class AppState {
     func stop() async {
         guard isRunning || isStarting else { return }
 
+        if isStarting {
+            activeCaptureStartAttempt = nil
+        }
         simulatorTranscriber.stopNow()
         await whisperKitTranscriber.stop()
         capturePipeline.stop()

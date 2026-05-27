@@ -206,6 +206,46 @@ private func testAppStateCanceledStartDoesNotRecordFailure() -> Bool {
     )
 }
 
+private func testAppStateScopesCaptureCompletionToStartupAttempt() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let runningSet = source.range(
+            of: "self.isRunning = true",
+            range: captureStart.upperBound..<source.endIndex
+          ),
+          let catchStart = source.range(
+            of: "} catch {",
+            range: captureStart.upperBound..<source.endIndex
+          ),
+          let failureHandler = source.range(
+            of: "self.handleCaptureStartFailure(error)",
+            range: catchStart.upperBound..<source.endIndex
+          ),
+          let stopStart = source.range(of: "func stop() async"),
+          let stopCapture = source.range(
+            of: "capturePipeline.stop()",
+            range: stopStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState startup-attempt lifecycle markers should exist\n", stderr)
+        return false
+    }
+
+    let successPath = source[captureStart.upperBound..<runningSet.lowerBound]
+    let failurePath = source[catchStart.upperBound..<failureHandler.lowerBound]
+    let stopPath = source[stopStart.upperBound..<stopCapture.lowerBound]
+    return expectEqual(
+        source.contains("@ObservationIgnored private var activeCaptureStartAttempt: UUID?") &&
+            source.contains("let startAttemptID = UUID()") &&
+            source.contains("activeCaptureStartAttempt = startAttemptID") &&
+            successPath.contains("self.activeCaptureStartAttempt == startAttemptID") &&
+            failurePath.contains("self.activeCaptureStartAttempt == startAttemptID") &&
+            stopPath.contains("activeCaptureStartAttempt = nil"),
+        true,
+        "capture start completions should be accepted only for the active startup attempt"
+    )
+}
+
 private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
     guard let source = readSource("Sources/EventSubtitlesApp/AppDelegate.swift") else {
         fputs("FAIL: AppDelegate source should be readable\n", stderr)
@@ -329,6 +369,7 @@ let tests = [
     ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
     ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
+    ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
     ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop),
     ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
     ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),
