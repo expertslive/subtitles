@@ -325,6 +325,59 @@ private func testAppStateScopesConfigurationRestartToRunningSession() -> Bool {
     )
 }
 
+private func testAppStateScopesAudioCallbacksToRunningSession() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let captureComplete = source.range(
+            of: "self.isRunning = true",
+            range: captureStart.upperBound..<source.endIndex
+          ),
+          let publishStart = source.range(of: "private func publishAudioLevel("),
+          let systemMemoryStart = source.range(
+            of: "var systemMemoryText:",
+            range: publishStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState audio callback markers should exist\n", stderr)
+        return false
+    }
+
+    let callbacks = source[captureStart.lowerBound..<captureComplete.lowerBound]
+    let publish = source[publishStart.lowerBound..<systemMemoryStart.lowerBound]
+    return expectEqual(
+        callbacks.contains("self?.publishAudioLevel(Double(max(sample.rms, sample.peak)), for: startAttemptID)") &&
+            callbacks.contains("self.runningCaptureSessionID == startAttemptID") &&
+            callbacks.contains("self.whisperKitTranscriber.ingest(samples)") &&
+            publish.contains("for runningSessionID: UUID") &&
+            publish.contains("guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }"),
+        true,
+        "audio level and sample delivery should be scoped to the current running capture session"
+    )
+}
+
+private func testAudioCapturePipelineBindsInstalledCallbacksToGeneration() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AudioCapturePipeline.swift") else {
+        fputs("FAIL: audio capture pipeline source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains("private var activeDeliveryGeneration: UInt64?") &&
+            source.contains("operationGeneration: UInt64,") &&
+            source.contains("self?.handleBuffer(") &&
+            source.contains("operationGeneration: operationGeneration") &&
+            source.contains("onLevel: onLevel") &&
+            source.contains("onSamples: onSamples") &&
+            source.contains("activeDeliveryGeneration == operationGeneration") &&
+            source.contains("private func installConfigChangeObserver(_ onConfigurationChange: @escaping @Sendable () -> Void)") &&
+            source.contains("private func installDefaultInputDeviceListener(_ onConfigurationChange: @escaping @Sendable () -> Void)") &&
+            source.contains("onConfigurationChange()") &&
+            !source.contains("self?.onConfigurationDidChange?()"),
+        true,
+        "tap and configuration delivery should use handlers captured for the installing generation"
+    )
+}
+
 private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
     guard let source = readSource("Sources/EventSubtitlesApp/AppDelegate.swift") else {
         fputs("FAIL: AppDelegate source should be readable\n", stderr)
@@ -451,6 +504,8 @@ let tests = [
     ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
     ("audioCapturePipelineSerializesControlOperations", testAudioCapturePipelineSerializesControlOperations),
     ("appStateScopesConfigurationRestartToRunningSession", testAppStateScopesConfigurationRestartToRunningSession),
+    ("appStateScopesAudioCallbacksToRunningSession", testAppStateScopesAudioCallbacksToRunningSession),
+    ("audioCapturePipelineBindsInstalledCallbacksToGeneration", testAudioCapturePipelineBindsInstalledCallbacksToGeneration),
     ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop),
     ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
     ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),

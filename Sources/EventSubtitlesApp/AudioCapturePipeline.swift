@@ -40,6 +40,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
     private var controlGeneration: UInt64 = 0
     private var recordingFile: AVAudioFile?
     private var running = false
+    private var activeDeliveryGeneration: UInt64?
     private var converter: AVAudioConverter?
 
     private let whisperFormat: AVAudioFormat = {
@@ -104,6 +105,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
             }
 
             try startLocked(
+                operationGeneration: operationGeneration,
                 inputDeviceID: inputDeviceID,
                 recordingURL: recordingURL,
                 preserveExistingRecording: false,
@@ -115,6 +117,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
     }
 
     private func startLocked(
+        operationGeneration: UInt64,
         inputDeviceID: AudioDeviceID?,
         recordingURL: URL?,
         preserveExistingRecording: Bool,
@@ -153,20 +156,31 @@ final class AudioCapturePipeline: @unchecked Sendable {
         } else if !preserveExistingRecording {
             recordingFile = nil
         }
+        let installedRecordingFile = recordingFile
 
         let bufferSize: AVAudioFrameCount = 1024
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
-            self?.handleBuffer(buffer)
+            self?.handleBuffer(
+                buffer,
+                operationGeneration: operationGeneration,
+                converter: converter,
+                recordingFile: installedRecordingFile,
+                onLevel: onLevel,
+                onSamples: onSamples
+            )
         }
 
-        installConfigChangeObserver()
-        installDefaultInputDeviceListener()
+        installConfigChangeObserver(onConfigurationChange)
+        installDefaultInputDeviceListener(onConfigurationChange)
 
         engine.prepare()
         try engine.start()
 
-        stateLock.withLock { running = true }
+        stateLock.withLock {
+            running = true
+            activeDeliveryGeneration = operationGeneration
+        }
     }
 
     func stop() {
@@ -179,6 +193,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
     private func stopLocked(keepRecordingFile: Bool) {
         stateLock.lock()
         guard running else {
+            activeDeliveryGeneration = nil
             stateLock.unlock()
             if !keepRecordingFile {
                 recordingFile = nil
@@ -186,6 +201,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
             return
         }
         running = false
+        activeDeliveryGeneration = nil
         stateLock.unlock()
 
         engine.inputNode.removeTap(onBus: 0)
@@ -241,6 +257,7 @@ final class AudioCapturePipeline: @unchecked Sendable {
                 throw AudioCapturePipelineError.inputUnavailable
             }
             try startLocked(
+                operationGeneration: operationGeneration,
                 inputDeviceID: inputDeviceID,
                 recordingURL: recordingURL,
                 preserveExistingRecording: shouldPreserveRecording,
@@ -264,8 +281,15 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
     }
 
-    private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let converter else { return }
+    private func handleBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        operationGeneration: UInt64,
+        converter: AVAudioConverter,
+        recordingFile: AVAudioFile?,
+        onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
+        onSamples: @escaping @Sendable ([Float]) -> Void
+    ) {
+        guard canDeliverCallbacks(for: operationGeneration) else { return }
 
         let inSampleRate = buffer.format.sampleRate
         let outSampleRate = whisperFormat.sampleRate
@@ -275,7 +299,8 @@ final class AudioCapturePipeline: @unchecked Sendable {
         guard outFrameCapacity > 0,
               let outBuffer = AVAudioPCMBuffer(pcmFormat: whisperFormat, frameCapacity: outFrameCapacity)
         else {
-            levelHandler?(AudioLevelSample(rms: 0, peak: 0))
+            guard canDeliverCallbacks(for: operationGeneration) else { return }
+            onLevel(AudioLevelSample(rms: 0, peak: 0))
             return
         }
 
@@ -287,13 +312,15 @@ final class AudioCapturePipeline: @unchecked Sendable {
 
         guard status != .error,
               let channel = outBuffer.floatChannelData?[0] else {
-            levelHandler?(AudioLevelSample(rms: 0, peak: 0))
+            guard canDeliverCallbacks(for: operationGeneration) else { return }
+            onLevel(AudioLevelSample(rms: 0, peak: 0))
             return
         }
 
         let frameCount = Int(outBuffer.frameLength)
         guard frameCount > 0 else {
-            levelHandler?(AudioLevelSample(rms: 0, peak: 0))
+            guard canDeliverCallbacks(for: operationGeneration) else { return }
+            onLevel(AudioLevelSample(rms: 0, peak: 0))
             return
         }
 
@@ -307,11 +334,12 @@ final class AudioCapturePipeline: @unchecked Sendable {
         let dbPeak = 20 * log10(max(peak, 0.000_001))
         let normalizedRMS = min(1, max(0, (dbRMS + 60) / 60))
         let normalizedPeak = min(1, max(0, (dbPeak + 60) / 60))
-        levelHandler?(AudioLevelSample(rms: normalizedRMS, peak: normalizedPeak))
+        guard canDeliverCallbacks(for: operationGeneration) else { return }
+        onLevel(AudioLevelSample(rms: normalizedRMS, peak: normalizedPeak))
 
         // Hand a Float copy to the Whisper consumer via direct callback.
         let samples = Array(UnsafeBufferPointer(start: channel, count: frameCount))
-        samplesHandler?(samples)
+        onSamples(samples)
 
         // Hand the converted PCM buffer to the write queue (off the audio thread).
         if let file = recordingFile {
@@ -319,6 +347,12 @@ final class AudioCapturePipeline: @unchecked Sendable {
             writeQueue.async {
                 try? file.write(from: bufferCopy)
             }
+        }
+    }
+
+    private func canDeliverCallbacks(for operationGeneration: UInt64) -> Bool {
+        stateLock.withLock {
+            running && activeDeliveryGeneration == operationGeneration
         }
     }
 
@@ -355,13 +389,13 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
     }
 
-    private func installConfigChangeObserver() {
+    private func installConfigChangeObserver(_ onConfigurationChange: @escaping @Sendable () -> Void) {
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
             queue: nil
-        ) { [weak self] _ in
-            self?.onConfigurationDidChange?()
+        ) { _ in
+            onConfigurationChange()
         }
     }
 
@@ -371,10 +405,10 @@ final class AudioCapturePipeline: @unchecked Sendable {
         mElement: kAudioObjectPropertyElementMain
     )
 
-    private func installDefaultInputDeviceListener() {
+    private func installDefaultInputDeviceListener(_ onConfigurationChange: @escaping @Sendable () -> Void) {
         guard !defaultDeviceListenerInstalled else { return }
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.onConfigurationDidChange?()
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            onConfigurationChange()
         }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),

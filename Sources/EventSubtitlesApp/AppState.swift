@@ -202,13 +202,16 @@ final class AppState {
                     recordingURL: self.sessionRecorder.audioRecordingURL,
                     onLevel: { [weak self] sample in
                         Task { @MainActor [weak self] in
-                            self?.publishAudioLevel(Double(max(sample.rms, sample.peak)))
+                            self?.publishAudioLevel(Double(max(sample.rms, sample.peak)), for: startAttemptID)
                         }
                     },
                     onSamples: { [weak self] samples in
-                        // Audio thread → Whisper. ingest is non-blocking and thread-safe
-                        // (StreamFedAudioProcessor uses an NSLock on its sample buffer).
-                        self?.whisperKitTranscriber.ingest(samples)
+                        Task { @MainActor [weak self] in
+                            guard let self,
+                                  self.isRunning,
+                                  self.runningCaptureSessionID == startAttemptID else { return }
+                            self.whisperKitTranscriber.ingest(samples)
+                        }
                     },
                     onConfigurationChange: { [weak self] in
                         Task { @MainActor [weak self] in
@@ -715,7 +718,8 @@ final class AppState {
         return AudioDeviceInspector.inputDevice(id: selectedAudioInputDeviceID)?.deviceID
     }
 
-    private func publishAudioLevel(_ level: Double) {
+    private func publishAudioLevel(_ level: Double, for runningSessionID: UUID) {
+        guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }
         let now = Date()
         guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 60.0 else { return }
         lastAudioLevelPublishedAt = now
