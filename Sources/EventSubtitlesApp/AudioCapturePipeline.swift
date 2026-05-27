@@ -36,6 +36,8 @@ final class AudioCapturePipeline: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let writeQueue = DispatchQueue(label: "audio.capture.write", qos: .utility)
     private let stateLock = NSLock()
+    private let controlLock = NSLock()
+    private var controlGeneration: UInt64 = 0
     private var recordingFile: AVAudioFile?
     private var running = false
     private var converter: AVAudioConverter?
@@ -74,31 +76,55 @@ final class AudioCapturePipeline: @unchecked Sendable {
         onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
     ) async throws {
-        guard await requestAudioAccess() else {
-            throw AudioCapturePipelineError.microphoneDenied
-        }
-
+        let operationGeneration = beginControlOperation()
         try await start(
+            operationGeneration: operationGeneration,
             inputDeviceID: inputDeviceID,
             recordingURL: recordingURL,
-            preserveExistingRecording: false,
             onLevel: onLevel,
             onSamples: onSamples,
             onConfigurationChange: onConfigurationChange
         )
     }
 
-    private func start(
+    func start(
+        operationGeneration: UInt64,
+        inputDeviceID: AudioDeviceID?,
+        recordingURL: URL?,
+        onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
+        onSamples: @escaping @Sendable ([Float]) -> Void,
+        onConfigurationChange: @escaping @Sendable () -> Void
+    ) async throws {
+        let hasAudioAccess = await requestAudioAccess()
+
+        try controlLock.withLock {
+            guard controlGeneration == operationGeneration else { throw CancellationError() }
+            guard hasAudioAccess else {
+                throw AudioCapturePipelineError.microphoneDenied
+            }
+
+            try startLocked(
+                inputDeviceID: inputDeviceID,
+                recordingURL: recordingURL,
+                preserveExistingRecording: false,
+                onLevel: onLevel,
+                onSamples: onSamples,
+                onConfigurationChange: onConfigurationChange
+            )
+        }
+    }
+
+    private func startLocked(
         inputDeviceID: AudioDeviceID?,
         recordingURL: URL?,
         preserveExistingRecording: Bool,
         onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
         onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
-    ) async throws {
+    ) throws {
         let wasRunning = stateLock.withLock { running }
         if wasRunning {
-            stop(keepRecordingFile: preserveExistingRecording)
+            stopLocked(keepRecordingFile: preserveExistingRecording)
         }
 
         levelHandler = onLevel
@@ -144,10 +170,13 @@ final class AudioCapturePipeline: @unchecked Sendable {
     }
 
     func stop() {
-        stop(keepRecordingFile: false)
+        controlLock.withLock {
+            controlGeneration &+= 1
+            stopLocked(keepRecordingFile: false)
+        }
     }
 
-    private func stop(keepRecordingFile: Bool) {
+    private func stopLocked(keepRecordingFile: Bool) {
         stateLock.lock()
         guard running else {
             stateLock.unlock()
@@ -187,25 +216,53 @@ final class AudioCapturePipeline: @unchecked Sendable {
         inputDeviceID: AudioDeviceID?,
         recordingURL: URL?
     ) async throws {
-        let level = self.levelHandler
-        let samples = self.samplesHandler
-        let onChange = self.onConfigurationDidChange
-        let shouldPreserveRecording = recordingURL == nil && recordingFile != nil
-        stop(keepRecordingFile: shouldPreserveRecording)
-        guard let level, let samples, let onChange else {
-            throw AudioCapturePipelineError.inputUnavailable
-        }
-        try await start(
+        let operationGeneration = beginControlOperation()
+        try await restart(
+            operationGeneration: operationGeneration,
             inputDeviceID: inputDeviceID,
-            recordingURL: recordingURL,
-            preserveExistingRecording: shouldPreserveRecording,
-            onLevel: level,
-            onSamples: samples,
-            onConfigurationChange: onChange
+            recordingURL: recordingURL
         )
     }
 
+    func restart(
+        operationGeneration: UInt64,
+        inputDeviceID: AudioDeviceID?,
+        recordingURL: URL?
+    ) async throws {
+        try controlLock.withLock {
+            guard controlGeneration == operationGeneration else { throw CancellationError() }
+
+            let level = self.levelHandler
+            let samples = self.samplesHandler
+            let onChange = self.onConfigurationDidChange
+            let shouldPreserveRecording = recordingURL == nil && recordingFile != nil
+            stopLocked(keepRecordingFile: shouldPreserveRecording)
+            guard let level, let samples, let onChange else {
+                throw AudioCapturePipelineError.inputUnavailable
+            }
+            try startLocked(
+                inputDeviceID: inputDeviceID,
+                recordingURL: recordingURL,
+                preserveExistingRecording: shouldPreserveRecording,
+                onLevel: level,
+                onSamples: samples,
+                onConfigurationChange: onChange
+            )
+        }
+    }
+
     // MARK: - Private
+
+    func reserveControlOperation() -> UInt64 {
+        beginControlOperation()
+    }
+
+    private func beginControlOperation() -> UInt64 {
+        controlLock.withLock {
+            controlGeneration &+= 1
+            return controlGeneration
+        }
+    }
 
     private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
         guard let converter else { return }

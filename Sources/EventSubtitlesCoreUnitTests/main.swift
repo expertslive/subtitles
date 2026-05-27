@@ -208,6 +208,7 @@ private func testAppStateCanceledStartDoesNotRecordFailure() -> Bool {
 
 private func testAppStateScopesCaptureCompletionToStartupAttempt() -> Bool {
     guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let startTask = source.range(of: "Task { @MainActor [weak self] in"),
           let captureStart = source.range(of: "try await self.capturePipeline.start"),
           let runningSet = source.range(
             of: "self.isRunning = true",
@@ -231,6 +232,7 @@ private func testAppStateScopesCaptureCompletionToStartupAttempt() -> Bool {
         return false
     }
 
+    let beforeCaptureStart = source[startTask.upperBound..<captureStart.lowerBound]
     let successPath = source[captureStart.upperBound..<runningSet.lowerBound]
     let failurePath = source[catchStart.upperBound..<failureHandler.lowerBound]
     let stopPath = source[stopStart.upperBound..<stopCapture.lowerBound]
@@ -238,11 +240,88 @@ private func testAppStateScopesCaptureCompletionToStartupAttempt() -> Bool {
         source.contains("@ObservationIgnored private var activeCaptureStartAttempt: UUID?") &&
             source.contains("let startAttemptID = UUID()") &&
             source.contains("activeCaptureStartAttempt = startAttemptID") &&
+            source.contains("let captureOperationGeneration = capturePipeline.reserveControlOperation()") &&
+            source.contains("operationGeneration: captureOperationGeneration") &&
+            beforeCaptureStart.contains("self.activeCaptureStartAttempt == startAttemptID") &&
             successPath.contains("self.activeCaptureStartAttempt == startAttemptID") &&
             failurePath.contains("self.activeCaptureStartAttempt == startAttemptID") &&
             stopPath.contains("activeCaptureStartAttempt = nil"),
         true,
         "capture start completions should be accepted only for the active startup attempt"
+    )
+}
+
+private func testAudioCapturePipelineSerializesControlOperations() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AudioCapturePipeline.swift"),
+          let publicStart = source.range(of: "func start("),
+          let privateStart = source.range(of: "private func start"),
+          let stop = source.range(of: "func stop()"),
+          let restart = source.range(of: "func restart("),
+          restart.lowerBound > stop.lowerBound
+    else {
+        fputs("FAIL: audio capture control-operation markers should exist\n", stderr)
+        return false
+    }
+
+    let startPath = source[publicStart.lowerBound..<privateStart.lowerBound]
+    let stopPath = source[stop.lowerBound..<restart.lowerBound]
+    let restartPath = source[restart.lowerBound..<source.endIndex]
+    let cancellationGuards = source.components(
+        separatedBy: "guard controlGeneration == operationGeneration else { throw CancellationError() }"
+    ).count - 1
+    return expectEqual(
+        source.contains("private let controlLock = NSLock()") &&
+            source.contains("private var controlGeneration: UInt64 = 0") &&
+            source.contains("private func beginControlOperation() -> UInt64") &&
+            source.contains("func reserveControlOperation() -> UInt64") &&
+            source.contains("operationGeneration: UInt64,") &&
+            startPath.contains("let operationGeneration = beginControlOperation()") &&
+            startPath.contains("controlLock.withLock") &&
+            startPath.contains("controlGeneration == operationGeneration") &&
+            stopPath.contains("controlLock.withLock") &&
+            stopPath.contains("controlGeneration &+= 1") &&
+            restartPath.contains("let operationGeneration = beginControlOperation()") &&
+            restartPath.contains("controlLock.withLock") &&
+            restartPath.contains("controlGeneration == operationGeneration") &&
+            cancellationGuards >= 2,
+        true,
+        "audio capture control operations should serialize mutation and throw cancellation when superseded"
+    )
+}
+
+private func testAppStateScopesConfigurationRestartToRunningSession() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let stopStart = source.range(of: "func stop() async"),
+          let failureHandler = source.range(of: "private func handleCaptureStartFailure"),
+          let restartStart = source.range(of: "private func handleAudioConfigurationChange(for runningSessionID: UUID)"),
+          let selectedInput = source.range(
+            of: "private func selectedAudioInputDeviceForCapture()",
+            range: restartStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState running-session restart markers should exist\n", stderr)
+        return false
+    }
+
+    let stopPath = source[stopStart.lowerBound..<failureHandler.lowerBound]
+    let restartPath = source[restartStart.lowerBound..<selectedInput.lowerBound]
+    let sessionChecks = restartPath.components(separatedBy: "self.runningCaptureSessionID == runningSessionID").count - 1
+    let stopInvalidationPrecedesAwait = stopPath.range(of: "capturePipeline.stop()")!.lowerBound <
+        stopPath.range(of: "await whisperKitTranscriber.stop()")!.lowerBound
+    return expectEqual(
+        source.contains("@ObservationIgnored private var runningCaptureSessionID: UUID?") &&
+            source.contains("self.runningCaptureSessionID = startAttemptID") &&
+            stopPath.contains("runningCaptureSessionID = nil") &&
+            stopInvalidationPrecedesAwait &&
+            source.contains("self?.handleAudioConfigurationChange(for: startAttemptID)") &&
+            restartPath.contains("guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }") &&
+            restartPath.contains("let restartOperationGeneration = capturePipeline.reserveControlOperation()") &&
+            restartPath.contains("operationGeneration: restartOperationGeneration") &&
+            restartPath.contains("try await self.capturePipeline.restart(") &&
+            restartPath.contains("catch is CancellationError {") &&
+            sessionChecks >= 4,
+        true,
+        "configuration restarts should ignore supersession and publish only for their originating running session"
     )
 }
 
@@ -370,6 +449,8 @@ let tests = [
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
     ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
     ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
+    ("audioCapturePipelineSerializesControlOperations", testAudioCapturePipelineSerializesControlOperations),
+    ("appStateScopesConfigurationRestartToRunningSession", testAppStateScopesConfigurationRestartToRunningSession),
     ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop),
     ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
     ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),

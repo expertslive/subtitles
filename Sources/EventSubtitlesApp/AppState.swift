@@ -152,6 +152,7 @@ final class AppState {
     @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     @ObservationIgnored private var outputController: OutputWindowController?
     @ObservationIgnored private var activeCaptureStartAttempt: UUID?
+    @ObservationIgnored private var runningCaptureSessionID: UUID?
     @ObservationIgnored var sessionStartedAt: Date?
     @ObservationIgnored private var lastCaptionSnapshotAt: Date?
     @ObservationIgnored var lastCaptionActivityAt: Date?
@@ -180,6 +181,7 @@ final class AppState {
 
         let startAttemptID = UUID()
         activeCaptureStartAttempt = startAttemptID
+        let captureOperationGeneration = capturePipeline.reserveControlOperation()
         didFailToStartSession = false
         hasAudioCaptureFailure = false
         isStarting = true
@@ -192,8 +194,10 @@ final class AppState {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            guard self.activeCaptureStartAttempt == startAttemptID, self.isStarting else { return }
             do {
                 try await self.capturePipeline.start(
+                    operationGeneration: captureOperationGeneration,
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                     recordingURL: self.sessionRecorder.audioRecordingURL,
                     onLevel: { [weak self] sample in
@@ -208,7 +212,7 @@ final class AppState {
                     },
                     onConfigurationChange: { [weak self] in
                         Task { @MainActor [weak self] in
-                            self?.handleAudioConfigurationChange()
+                            self?.handleAudioConfigurationChange(for: startAttemptID)
                         }
                     }
                 )
@@ -226,6 +230,7 @@ final class AppState {
                 self.activeCaptureStartAttempt = nil
                 self.isRunning = true
                 self.isStarting = false
+                self.runningCaptureSessionID = startAttemptID
                 self.hasAudioCaptureFailure = false
                 self.engineStatus = self.transcriptionEngine.statusLabel
                 self.startSleepPreventionIfNeeded()
@@ -246,12 +251,11 @@ final class AppState {
     func stop() async {
         guard isRunning || isStarting else { return }
 
-        if isStarting {
-            activeCaptureStartAttempt = nil
-        }
+        activeCaptureStartAttempt = nil
+        runningCaptureSessionID = nil
         simulatorTranscriber.stopNow()
-        await whisperKitTranscriber.stop()
         capturePipeline.stop()
+        await whisperKitTranscriber.stop()
         audioLevel = 0
         isRunning = false
         isStarting = false
@@ -274,6 +278,7 @@ final class AppState {
         audioLevel = 0
         isRunning = false
         isStarting = false
+        runningCaptureSessionID = nil
         didFailToStartSession = true
         hasAudioCaptureFailure = true
         engineStatus = transcriptionEngine.idleStatusLabel
@@ -664,27 +669,34 @@ final class AppState {
     }
 
     @MainActor
-    private func handleAudioConfigurationChange() {
+    private func handleAudioConfigurationChange(for runningSessionID: UUID) {
+        guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }
         refreshAudioInputDevice()
         sessionLogger.warn("Audio configuration change; restarting capture")
-        guard isRunning else { return }
 
         let priorDescription = audioInputDescription
         engineStatus = "Capture restarting"
+        let restartOperationGeneration = capturePipeline.reserveControlOperation()
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            guard self.isRunning, self.runningCaptureSessionID == runningSessionID else { return }
             do {
                 try await self.capturePipeline.restart(
+                    operationGeneration: restartOperationGeneration,
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                     recordingURL: nil // Keep the active CAF writer instead of rotating files mid-session.
                 )
+                guard self.isRunning, self.runningCaptureSessionID == runningSessionID else { return }
                 self.hasAudioCaptureFailure = false
                 self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
                 if priorDescription != self.audioInputDescription {
                     self.errorMessage = "Audio device changed: \(self.audioInputDescription)"
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                guard self.isRunning, self.runningCaptureSessionID == runningSessionID else { return }
                 self.sessionLogger.error("Capture restart failed: \(error.localizedDescription)")
                 self.hasAudioCaptureFailure = true
                 self.engineStatus = "Capture restart failed"
