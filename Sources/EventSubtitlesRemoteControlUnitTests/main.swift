@@ -14,6 +14,245 @@ private func expect(_ condition: @autoclosure () throws -> Bool, _ message: Stri
     }
 }
 
+private struct TestFailure: Error, CustomStringConvertible {
+    let description: String
+
+    init(_ description: String) {
+        self.description = description
+    }
+}
+
+private actor CommandRecorder {
+    private var requests: [StreamDeckCommandRequest] = []
+
+    func append(_ request: StreamDeckCommandRequest) {
+        requests.append(request)
+    }
+
+    func values() -> [StreamDeckCommandRequest] {
+        requests
+    }
+}
+
+private actor StatusCounter {
+    private var count = 0
+
+    func nextSnapshot() -> StreamDeckStatusSnapshot {
+        count += 1
+        return testStatusSnapshot(segmentCount: count)
+    }
+}
+
+private actor DiagnosticsRecorder {
+    private var messages: [String] = []
+
+    func append(_ message: String) {
+        messages.append(message)
+    }
+
+    func values() -> [String] {
+        messages
+    }
+}
+
+private final class TestWebSocketClient: @unchecked Sendable {
+    private var socketFD: Int32 = -1
+
+    func connect(port: Int, path: String = "/streamdeck/v1") async throws {
+        socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        guard socketFD >= 0 else {
+            throw TestFailure("failed to create socket")
+        }
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(socketFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(port).bigEndian
+        inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
+
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.connect(socketFD, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connected == 0 else {
+            throw TestFailure("failed to connect socket")
+        }
+
+        let request = "GET \(path) HTTP/1.1\r\n" +
+            "Host: 127.0.0.1:\(port)\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+            "Sec-WebSocket-Version: 13\r\n" +
+            "\r\n"
+        try writeAll(Array(request.utf8))
+        let response = try readHTTPResponse()
+        guard response.contains(" 101 ") else {
+            throw TestFailure("websocket upgrade failed")
+        }
+    }
+
+    func send(_ message: StreamDeckIncomingMessage) async throws {
+        let data = try JSONEncoder().encode(message)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw TestFailure("encoded message was not UTF-8")
+        }
+        try await sendRawText(text)
+    }
+
+    func sendRawText(_ text: String) async throws {
+        guard socketFD >= 0 else {
+            throw TestFailure("websocket is not connected")
+        }
+        let payload = Array(text.utf8)
+        guard payload.count < 126 else {
+            throw TestFailure("test websocket payload too large")
+        }
+        let mask: [UInt8] = [0x01, 0x02, 0x03, 0x04]
+        let maskedPayload = payload.enumerated().map { index, byte in
+            byte ^ mask[index % mask.count]
+        }
+        try writeAll([0x81, 0x80 | UInt8(payload.count)] + mask + maskedPayload)
+    }
+
+    func receiveMessage(timeoutNanoseconds: UInt64 = 2_000_000_000) async throws -> StreamDeckOutgoingMessage {
+        let text = try readTextFrame()
+        return try JSONDecoder().decode(StreamDeckOutgoingMessage.self, from: Data(text.utf8))
+    }
+
+    func waitForClose(timeoutNanoseconds: UInt64 = 2_000_000_000) async throws {
+        while true {
+            do {
+                let opcode = try readFrameOpcode()
+                if opcode == 0x8 {
+                    return
+                }
+            } catch {
+                throw TestFailure("timed out waiting for websocket close")
+            }
+        }
+    }
+
+    func close() async {
+        if socketFD >= 0 {
+            try? writeAll([0x88, 0x80, 0x01, 0x02, 0x03, 0x04])
+            Darwin.close(socketFD)
+            socketFD = -1
+        }
+    }
+
+    private func readHTTPResponse() throws -> String {
+        var bytes: [UInt8] = []
+        var byte: UInt8 = 0
+        while true {
+            let count = Darwin.read(socketFD, &byte, 1)
+            guard count == 1 else {
+                throw TestFailure("failed reading websocket handshake")
+            }
+            bytes.append(byte)
+            if bytes.suffix(4) == [13, 10, 13, 10] {
+                break
+            }
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    private func readTextFrame() throws -> String {
+        while true {
+            let opcode = try readFrameOpcode()
+            if opcode == 0x1 {
+                guard let text = String(data: lastFramePayload, encoding: .utf8) else {
+                    throw TestFailure("received non-UTF8 websocket text")
+                }
+                return text
+            }
+            if opcode == 0x8 {
+                throw TestFailure("websocket closed before text frame")
+            }
+            if opcode != 0x9 && opcode != 0xA {
+                throw TestFailure("expected text websocket frame, got opcode \(opcode)")
+            }
+        }
+    }
+
+    private var lastFramePayload: Data = Data()
+
+    @discardableResult
+    private func readFrameOpcode() throws -> UInt8 {
+        let header = try readExact(2)
+        let opcode = header[0] & 0x0f
+        let isMasked = (header[1] & 0x80) != 0
+        var length = Int(header[1] & 0x7f)
+        if length == 126 {
+            let extended = try readExact(2)
+            length = Int(extended[0]) << 8 | Int(extended[1])
+        } else if length == 127 {
+            let extended = try readExact(8)
+            length = extended.reduce(0) { ($0 << 8) | Int($1) }
+        }
+        let mask = isMasked ? try readExact(4) : []
+        var payload = try readExact(length)
+        if isMasked {
+            payload = payload.enumerated().map { index, byte in
+                byte ^ mask[index % mask.count]
+            }
+        }
+        lastFramePayload = Data(payload)
+        return opcode
+    }
+
+    private func readExact(_ count: Int) throws -> [UInt8] {
+        guard count > 0 else { return [] }
+        var bytes = [UInt8](repeating: 0, count: count)
+        var offset = 0
+        while offset < count {
+            let readCount = bytes.withUnsafeMutableBytes { rawBuffer in
+                Darwin.read(socketFD, rawBuffer.baseAddress!.advanced(by: offset), count - offset)
+            }
+            guard readCount > 0 else {
+                throw TestFailure("socket closed while reading")
+            }
+            offset += readCount
+        }
+        return bytes
+    }
+
+    private func writeAll(_ bytes: [UInt8]) throws {
+        var offset = 0
+        while offset < bytes.count {
+            let written = bytes.withUnsafeBytes { rawBuffer in
+                Darwin.write(socketFD, rawBuffer.baseAddress!.advanced(by: offset), bytes.count - offset)
+            }
+            guard written > 0 else {
+                throw TestFailure("socket write failed")
+            }
+            offset += written
+        }
+    }
+}
+
+private func temporaryDiscoveryStore() -> (URL, StreamDeckDiscoveryStore) {
+    let rootURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("EventSubtitlesRemoteControlUnitTests-\(UUID().uuidString)", isDirectory: true)
+    return (rootURL, StreamDeckDiscoveryStore(directoryURL: rootURL))
+}
+
+private func testStatusSnapshot(segmentCount: Int = 0) -> StreamDeckStatusSnapshot {
+    StreamDeckStatusSnapshot(
+        sessionState: .running,
+        elapsedText: "00:00:\(String(format: "%02d", segmentCount))",
+        displayState: .filled,
+        outputState: .live,
+        captionState: .active,
+        audioState: .healthy,
+        errorSummary: nil,
+        displayedSegmentCount: segmentCount
+    )
+}
+
 private func testPanicBlankCommandMessageRoundTrips() throws {
     let input = StreamDeckIncomingMessage.command(
         StreamDeckCommandRequest(id: "panic-1", command: .panicBlank)
@@ -556,6 +795,147 @@ private func testErrorSummaryProjection() {
     )
 }
 
+private func testServerPublishesDynamicLoopbackDiscoveryAndRemovesOwnedRecordOnStop() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: { testStatusSnapshot() }
+    )
+    try await server.start()
+
+    let record = try store.read()
+    expect(record?.host == "127.0.0.1", "server discovery should publish loopback host")
+    expect((record?.port ?? 0) > 0, "server discovery should publish a dynamic bound port")
+    expect(record?.protocolVersion == streamDeckProtocolVersion, "server discovery should publish current protocol version")
+    expect(record?.processID == ProcessInfo.processInfo.processIdentifier, "server discovery should publish current process ID")
+
+    try await server.stop()
+    expect(try store.read() == nil, "server stop should remove its owned discovery record")
+}
+
+private func testServerHelloCommandResultAndStatusFlow() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let handledCommands = CommandRecorder()
+    let statusCounter = StatusCounter()
+    let diagnostics = DiagnosticsRecorder()
+
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in
+            await handledCommands.append(request)
+            return StreamDeckCommandResult(id: request.id, accepted: true)
+        },
+        statusProvider: {
+            await statusCounter.nextSnapshot()
+        },
+        diagnostics: { message in
+            Task { await diagnostics.append(message) }
+        }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before client connection")
+        return
+    }
+    let client = TestWebSocketClient()
+    try await client.connect(port: port)
+    defer { Task { await client.close() } }
+
+    try await client.send(.hello(StreamDeckHello(pluginVersion: "test-plugin")))
+    let helloStatus: StreamDeckOutgoingMessage
+    do {
+        helloStatus = try await client.receiveMessage()
+    } catch {
+        fputs("Diagnostics: \(await diagnostics.values())\n", stderr)
+        throw error
+    }
+    expect(
+        helloStatus == .status(StreamDeckStatusMessage(status: testStatusSnapshot(segmentCount: 1))),
+        "server should send complete status after hello"
+    )
+
+    let request = StreamDeckCommandRequest(id: "command-1", command: .panicBlank)
+    try await client.send(.command(request))
+    let result = try await client.receiveMessage()
+    let status = try await client.receiveMessage()
+    expect(result == .commandResult(StreamDeckCommandResult(id: "command-1", accepted: true)), "server should return command result")
+    expect(status == .status(StreamDeckStatusMessage(status: testStatusSnapshot(segmentCount: 2))), "server should send fresh status after command")
+    let handledCommandValues = await handledCommands.values()
+    expect(handledCommandValues == [request], "server should pass valid commands to the command handler")
+    try await server.stop()
+}
+
+private func testServerRejectsWrongPathOrProtocol() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: { testStatusSnapshot() }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before rejection tests")
+        return
+    }
+
+    let wrongPathClient = TestWebSocketClient()
+    do {
+        try await wrongPathClient.connect(port: port, path: "/wrong")
+        defer { Task { await wrongPathClient.close() } }
+        try await wrongPathClient.send(.hello(StreamDeckHello(pluginVersion: "test")))
+        try await wrongPathClient.waitForClose()
+    } catch {
+        // Expected: the upgrade may be rejected before a websocket is established.
+    }
+
+    let wrongProtocolClient = TestWebSocketClient()
+    try await wrongProtocolClient.connect(port: port)
+    defer { Task { await wrongProtocolClient.close() } }
+    try await wrongProtocolClient.send(.hello(StreamDeckHello(protocolVersion: streamDeckProtocolVersion + 1, pluginVersion: "test")))
+    try await wrongProtocolClient.waitForClose()
+    try await server.stop()
+}
+
+private func testPublishStatusBroadcastsToEstablishedClient() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let statusCounter = StatusCounter()
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: {
+            await statusCounter.nextSnapshot()
+        }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before broadcast test")
+        return
+    }
+    let client = TestWebSocketClient()
+    try await client.connect(port: port)
+    defer { Task { await client.close() } }
+    try await client.send(.hello(StreamDeckHello(pluginVersion: "test-plugin")))
+    _ = try await client.receiveMessage()
+
+    await server.publishStatus()
+
+    let broadcast = try await client.receiveMessage()
+    expect(
+        broadcast == .status(StreamDeckStatusMessage(status: testStatusSnapshot(segmentCount: 2))),
+        "publishStatus should broadcast a fresh complete status to handshaken clients"
+    )
+    try await server.stop()
+}
+
 private func rejectsDecode(
     _ json: String,
     _ message: String,
@@ -637,6 +1017,10 @@ do {
     guard negativeTestsPassed else {
         exit(1)
     }
+    try await testServerPublishesDynamicLoopbackDiscoveryAndRemovesOwnedRecordOnStop()
+    try await testServerHelloCommandResultAndStatusFlow()
+    try await testServerRejectsWrongPathOrProtocol()
+    try await testPublishStatusBroadcastsToEstablishedClient()
     print("PASS: Stream Deck remote control protocol")
 } catch {
     fputs("FAIL: Stream Deck remote control protocol: \(error)\n", stderr)

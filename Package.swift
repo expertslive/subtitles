@@ -17,7 +17,8 @@ let package = Package(
         .library(name: "EventSubtitlesRemoteControl", targets: ["EventSubtitlesRemoteControl"])
     ],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "0.18.0")
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "0.18.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.80.0")
     ],
     targets: [
         .target(name: "EventSubtitlesCore"),
@@ -37,7 +38,15 @@ let package = Package(
             name: "EventSubtitlesCoreUnitTests",
             dependencies: ["EventSubtitlesCore"]
         ),
-        .target(name: "EventSubtitlesRemoteControl"),
+        .target(
+            name: "EventSubtitlesRemoteControl",
+            dependencies: [
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOWebSocket", package: "swift-nio")
+            ]
+        ),
         .executableTarget(
             name: "EventSubtitlesRemoteControlUnitTests",
             dependencies: ["EventSubtitlesRemoteControl"]

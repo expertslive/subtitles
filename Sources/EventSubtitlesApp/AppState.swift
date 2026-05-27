@@ -2,6 +2,7 @@ import AppKit
 import CoreAudio
 import Darwin
 import EventSubtitlesCore
+import EventSubtitlesRemoteControl
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -151,6 +152,7 @@ final class AppState {
     @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
     @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     @ObservationIgnored private var outputController: OutputWindowController?
+    @ObservationIgnored private var streamDeckControlServer: StreamDeckControlServer?
     @ObservationIgnored private var activeCaptureStartAttempt: UUID?
     @ObservationIgnored private var runningCaptureSessionID: UUID?
     @ObservationIgnored var sessionStartedAt: Date?
@@ -172,6 +174,73 @@ final class AppState {
         refreshAudioInputDevice()
         refreshResourceUsage()
         updateSleepPreventionStatusForIdle()
+        startStreamDeckControlServer()
+    }
+
+    private func startStreamDeckControlServer() {
+        let server = StreamDeckControlServer(
+            commandHandler: { [weak self] request in
+                guard let self else {
+                    return StreamDeckCommandResult(id: request.id, accepted: false, reason: .internalError)
+                }
+                return await self.handleStreamDeckCommand(request)
+            },
+            statusProvider: { [weak self] in
+                guard let self else {
+                    return StreamDeckStatusSnapshot(
+                        sessionState: .error,
+                        elapsedText: "00:00:00",
+                        displayState: .hidden,
+                        outputState: .live,
+                        captionState: .clear,
+                        audioState: .unknown,
+                        errorSummary: "App unavailable",
+                        displayedSegmentCount: 0
+                    )
+                }
+                return await self.streamDeckStatusSnapshot()
+            },
+            diagnostics: { [weak self] message in
+                Task { @MainActor [weak self] in
+                    self?.sessionLogger.info("Stream Deck control: \(message)")
+                }
+            }
+        )
+        streamDeckControlServer = server
+        Task { @MainActor [weak self, server] in
+            do {
+                try await server.start()
+                self?.publishStreamDeckStatus()
+            } catch {
+                self?.sessionLogger.error("Stream Deck control server failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func publishStreamDeckStatus() {
+        guard let streamDeckControlServer else {
+            return
+        }
+        Task {
+            await streamDeckControlServer.publishStatus()
+        }
+    }
+
+    func stopStreamDeckControlServer() {
+        guard let streamDeckControlServer else {
+            return
+        }
+        self.streamDeckControlServer = nil
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached {
+            do {
+                try await streamDeckControlServer.stop()
+            } catch {
+                // Termination path: diagnostics may already be unavailable.
+            }
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 2)
     }
 
     func start() {
