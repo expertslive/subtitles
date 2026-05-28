@@ -121,8 +121,10 @@ public final class StreamDeckControlServer: @unchecked Sendable {
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
+        var boundListener: Channel?
         do {
             let channel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
+            boundListener = channel
             guard let port = channel.localAddress?.port else {
                 throw StreamDeckControlServerError.missingBoundPort
             }
@@ -140,6 +142,7 @@ public final class StreamDeckControlServer: @unchecked Sendable {
         } catch {
             diagnostics("streamdeck.server.start.failed")
             try? await clients.closeAll()
+            try? await boundListener?.close().get()
             try? await group.shutdownGracefullyAsync()
             throw error
         }
@@ -338,16 +341,37 @@ private actor StreamDeckClientRegistry {
     }
 }
 
-private actor StreamDeckClientMessageProcessor {
+private final class StreamDeckClientMessageProcessor: @unchecked Sendable {
+    private let lock = NSLock()
     private var tail: Task<Void, Never>?
+    private var active = true
 
     func enqueue(_ operation: @escaping @Sendable () async -> Void) {
-        let previous = tail
-        let next = Task {
-            await previous?.value
-            await operation()
+        lock.withLock {
+            guard active else {
+                return
+            }
+            let previous = tail
+            let next = Task { [weak self] in
+                await previous?.value
+                guard self?.isActive == true else {
+                    return
+                }
+                await operation()
+            }
+            tail = next
         }
-        tail = next
+    }
+
+    func cancel() {
+        lock.withLock {
+            active = false
+            tail?.cancel()
+        }
+    }
+
+    var isActive: Bool {
+        lock.withLock { active }
     }
 }
 
@@ -399,6 +423,7 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
         case .pong:
             break
         case .connectionClose:
+            processor.cancel()
             Task { await clients.close(id: clientID, diagnostics: diagnostics) }
         case .continuation:
             reject("streamdeck.websocket.reject.fragmented_frame")
@@ -408,6 +433,7 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        processor.cancel()
         Task { await clients.remove(id: clientID) }
     }
 
@@ -419,29 +445,44 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
             return
         }
 
-        Task { [processor] in
-            await processor.enqueue { [clientID, clients, commandHandler, statusProvider, diagnostics] in
+        processor.enqueue { [clientID, clients, processor, commandHandler, statusProvider, diagnostics] in
             switch message {
             case .hello(let hello):
+                guard processor.isActive else {
+                    return
+                }
                 guard hello.protocolVersion == streamDeckProtocolVersion else {
                     diagnostics("streamdeck.websocket.reject.protocol_version")
+                    processor.cancel()
                     await clients.close(id: clientID, diagnostics: diagnostics)
                     return
                 }
                 await clients.markHandshaken(id: clientID)
                 let status = await statusProvider()
+                guard processor.isActive else {
+                    return
+                }
                 await clients.send(.status(StreamDeckStatusMessage(status: status)), to: clientID, diagnostics: diagnostics)
             case .command(let request):
+                guard processor.isActive else {
+                    return
+                }
                 guard await clients.isHandshaken(id: clientID) else {
                     diagnostics("streamdeck.websocket.reject.command_before_hello")
+                    processor.cancel()
                     await clients.close(id: clientID, diagnostics: diagnostics)
                     return
                 }
                 let result = await commandHandler(request)
+                guard processor.isActive else {
+                    return
+                }
                 await clients.send(.commandResult(result), to: clientID, diagnostics: diagnostics)
                 let status = await statusProvider()
+                guard processor.isActive else {
+                    return
+                }
                 await clients.send(.status(StreamDeckStatusMessage(status: status)), to: clientID, diagnostics: diagnostics)
-            }
             }
         }
     }
@@ -454,6 +495,7 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
 
     private func rejectAsync(_ diagnostic: String) async {
         diagnostics(diagnostic)
+        processor.cancel()
         await clients.close(id: clientID, diagnostics: diagnostics)
     }
 }

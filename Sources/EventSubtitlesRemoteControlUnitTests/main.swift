@@ -70,6 +70,46 @@ private actor CommandDelayController {
     }
 }
 
+private actor CommandGate {
+    private var enteredIDs: [String] = []
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+
+    func result(for request: StreamDeckCommandRequest) async -> StreamDeckCommandResult {
+        enteredIDs.append(request.id)
+        for waiter in enteredWaiters {
+            waiter.resume()
+        }
+        enteredWaiters.removeAll()
+        if request.id == "slow" && !isReleased {
+            await withCheckedContinuation { continuation in
+                releaseContinuation = continuation
+            }
+        }
+        return StreamDeckCommandResult(id: request.id, accepted: true)
+    }
+
+    func waitUntilEntered(_ id: String) async {
+        if enteredIDs.contains(id) {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        isReleased = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func entered() -> [String] {
+        enteredIDs
+    }
+}
+
 private enum WebSocketUpgradeResult: Equatable {
     case upgraded
     case rejected(statusLine: String)
@@ -329,6 +369,10 @@ private func testStatusSnapshot(segmentCount: Int = 0) -> StreamDeckStatusSnapsh
         errorSummary: nil,
         displayedSegmentCount: segmentCount
     )
+}
+
+private func readSource(_ path: String) -> String? {
+    String(data: FileManager.default.contents(atPath: path) ?? Data(), encoding: .utf8)
 }
 
 private func testPanicBlankCommandMessageRoundTrips() throws {
@@ -1040,6 +1084,43 @@ private func testServerPreservesMultipleCommandResultStatusOrderWhenHandlersSusp
     try await server.stop()
 }
 
+private func testQueuedCommandDoesNotExecuteAfterClientCloses() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let gate = CommandGate()
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in await gate.result(for: request) },
+        statusProvider: { testStatusSnapshot() }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before queued-close test")
+        return
+    }
+    let client = TestWebSocketClient()
+    try await client.connect(port: port)
+    try await client.send(.hello(StreamDeckHello(pluginVersion: "test-plugin")))
+    _ = try await client.receiveMessage()
+
+    try await client.send([
+        .command(StreamDeckCommandRequest(id: "slow", command: .panicBlank)),
+        .command(StreamDeckCommandRequest(id: "queued", command: .clearCaptions))
+    ])
+    await gate.waitUntilEntered("slow")
+    await client.close()
+    await gate.release()
+    try await Task.sleep(nanoseconds: 250_000_000)
+
+    let enteredCommands = await gate.entered()
+    expect(
+        enteredCommands == ["slow"],
+        "queued commands should not execute after the client closes"
+    )
+    try await server.stop()
+}
+
 private func testServerRejectsWrongPathOrProtocol() async throws {
     let (rootURL, store) = temporaryDiscoveryStore()
     defer { try? FileManager.default.removeItem(at: rootURL) }
@@ -1197,6 +1278,33 @@ private func testPublishStatusBroadcastsToEstablishedClient() async throws {
     try await server.stop()
 }
 
+private func testAppStateCoordinatesStreamDeckStartupTaskDuringShutdown() {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
+        expect(false, "AppState source should be readable")
+        return
+    }
+
+    expect(
+        source.contains("streamDeckControlServerStartTask") &&
+            source.contains("await startTask.value") &&
+            source.contains("startTask.cancel()"),
+        "AppState should retain and coordinate the Stream Deck startup task during shutdown"
+    )
+}
+
+private func testServerStartFailureCleanupClosesBoundListener() {
+    guard let source = readSource("Sources/EventSubtitlesRemoteControl/StreamDeckControlServer.swift") else {
+        expect(false, "StreamDeckControlServer source should be readable")
+        return
+    }
+
+    expect(
+        source.contains("boundListener") &&
+            source.contains("boundListener?.close()"),
+        "server start failure cleanup should close a listener if bind succeeded before discovery failed"
+    )
+}
+
 private func rejectsDecode(
     _ json: String,
     _ message: String,
@@ -1282,12 +1390,15 @@ do {
     try await testServerHelloCommandResultAndStatusFlow()
     try await testServerProcessesBackToBackHelloAndCommandInOrder()
     try await testServerPreservesMultipleCommandResultStatusOrderWhenHandlersSuspend()
+    try await testQueuedCommandDoesNotExecuteAfterClientCloses()
     try await testServerRejectsWrongPathOrProtocol()
     try await testServerRepliesToMaskedPingWithUnmaskedPongPayload()
     try await testServerRejectsFragmentedTextFramesForV1()
     try await testConcurrentStartAndStopConvergesAndRemovesDiscovery()
     try await testStopWhileStartIsInFlightConvergesWithoutOwnedDiscovery()
     try await testPublishStatusBroadcastsToEstablishedClient()
+    testAppStateCoordinatesStreamDeckStartupTaskDuringShutdown()
+    testServerStartFailureCleanupClosesBoundListener()
     print("PASS: Stream Deck remote control protocol")
 } catch {
     fputs("FAIL: Stream Deck remote control protocol: \(error)\n", stderr)

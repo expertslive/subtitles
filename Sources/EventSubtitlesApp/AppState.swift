@@ -153,6 +153,7 @@ final class AppState {
     @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     @ObservationIgnored private var outputController: OutputWindowController?
     @ObservationIgnored private var streamDeckControlServer: StreamDeckControlServer?
+    @ObservationIgnored private var streamDeckControlServerStartTask: Task<Void, Never>?
     @ObservationIgnored private var activeCaptureStartAttempt: UUID?
     @ObservationIgnored private var runningCaptureSessionID: UUID?
     @ObservationIgnored var sessionStartedAt: Date?
@@ -207,14 +208,24 @@ final class AppState {
             }
         )
         streamDeckControlServer = server
-        Task { @MainActor [weak self, server] in
+        let startTask = Task { @MainActor [weak self, server] in
+            guard !Task.isCancelled else {
+                return
+            }
             do {
                 try await server.start()
+                guard !Task.isCancelled else {
+                    return
+                }
                 self?.publishStreamDeckStatus()
             } catch {
+                guard !Task.isCancelled else {
+                    return
+                }
                 self?.sessionLogger.error("Stream Deck control server failed: \(error.localizedDescription)")
             }
         }
+        streamDeckControlServerStartTask = startTask
     }
 
     func publishStreamDeckStatus() {
@@ -230,7 +241,13 @@ final class AppState {
         guard let streamDeckControlServer else {
             return
         }
+        let startTask = streamDeckControlServerStartTask
+        streamDeckControlServerStartTask = nil
         self.streamDeckControlServer = nil
+        if let startTask {
+            startTask.cancel()
+            await startTask.value
+        }
         do {
             try await streamDeckControlServer.stop()
         } catch {
