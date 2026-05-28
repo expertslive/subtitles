@@ -1305,6 +1305,29 @@ private func testServerStartFailureCleanupClosesBoundListener() {
     )
 }
 
+private func testRejectCancelsProcessorSynchronouslyBeforeAsyncClose() {
+    guard let source = readSource("Sources/EventSubtitlesRemoteControl/StreamDeckControlServer.swift"),
+          let rejectRange = source.range(of: "private func reject(_ diagnostic: String)"),
+          let rejectAsyncRange = source.range(of: "private func rejectAsync", range: rejectRange.upperBound..<source.endIndex)
+    else {
+        expect(false, "StreamDeckControlServer reject source should be readable")
+        return
+    }
+
+    let rejectBody = String(source[rejectRange.lowerBound..<rejectAsyncRange.lowerBound])
+    guard let cancelRange = rejectBody.range(of: "processor.cancel()"),
+          let taskRange = rejectBody.range(of: "Task {")
+    else {
+        expect(false, "reject should synchronously cancel before scheduling async close work")
+        return
+    }
+
+    expect(
+        cancelRange.lowerBound < taskRange.lowerBound,
+        "reject should synchronously cancel the processor before scheduling async close work"
+    )
+}
+
 private func rejectsDecode(
     _ json: String,
     _ message: String,
@@ -1399,6 +1422,7 @@ do {
     try await testPublishStatusBroadcastsToEstablishedClient()
     testAppStateCoordinatesStreamDeckStartupTaskDuringShutdown()
     testServerStartFailureCleanupClosesBoundListener()
+    testRejectCancelsProcessorSynchronouslyBeforeAsyncClose()
     print("PASS: Stream Deck remote control protocol")
 } catch {
     fputs("FAIL: Stream Deck remote control protocol: \(error)\n", stderr)

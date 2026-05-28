@@ -488,6 +488,7 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
     }
 
     private func reject(_ diagnostic: String) {
+        processor.cancel()
         Task {
             await rejectAsync(diagnostic)
         }
