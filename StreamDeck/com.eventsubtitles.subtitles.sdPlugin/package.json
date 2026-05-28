@@ -1,0 +1,22 @@
+{
+  "name": "com.eventsubtitles.subtitles",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "pack": "streamdeck pack . --output ../../build"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "^2.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@elgato/cli": "^1.0.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}
