@@ -226,21 +226,16 @@ final class AppState {
         }
     }
 
-    func stopStreamDeckControlServer() {
+    func stopStreamDeckControlServer() async {
         guard let streamDeckControlServer else {
             return
         }
         self.streamDeckControlServer = nil
-        let semaphore = DispatchSemaphore(value: 0)
-        Task.detached {
-            do {
-                try await streamDeckControlServer.stop()
-            } catch {
-                // Termination path: diagnostics may already be unavailable.
-            }
-            semaphore.signal()
+        do {
+            try await streamDeckControlServer.stop()
+        } catch {
+            sessionLogger.error("Stream Deck control server stop failed: \(error.localizedDescription)")
         }
-        _ = semaphore.wait(timeout: .now() + 2)
     }
 
     func start() {

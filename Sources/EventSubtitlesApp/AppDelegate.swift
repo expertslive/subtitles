@@ -4,7 +4,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var state: AppState?
-    private var isTerminatingAfterSessionStop = false
+    private var isTerminatingAfterCleanup = false
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // If a session is running, do NOT terminate when the operator window closes —
@@ -14,11 +14,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if isTerminatingAfterSessionStop {
+        if isTerminatingAfterCleanup {
             return .terminateNow
         }
 
-        guard let state, state.isRunning || state.isStarting else { return .terminateNow }
+        guard let state else { return .terminateNow }
+        guard state.isRunning || state.isStarting else {
+            Task { @MainActor [weak self] in
+                await state.stopStreamDeckControlServer()
+                self?.isTerminatingAfterCleanup = true
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
 
         let alert = NSAlert()
         alert.messageText = "End the live session?"
@@ -33,7 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task { @MainActor [weak self] in
             await state.stop()
-            self?.isTerminatingAfterSessionStop = true
+            await state.stopStreamDeckControlServer()
+            self?.isTerminatingAfterCleanup = true
             sender.reply(toApplicationShouldTerminate: true)
         }
 
@@ -41,7 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        state?.stopStreamDeckControlServer()
         state?.flushSettingsImmediately()
     }
 }

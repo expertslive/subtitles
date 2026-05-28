@@ -15,8 +15,7 @@ public final class StreamDeckControlServer: @unchecked Sendable {
     private let diagnostics: DiagnosticsHandler
     private let clients = StreamDeckClientRegistry()
     private let lifecycleLock = NSLock()
-    private var group: MultiThreadedEventLoopGroup?
-    private var listener: Channel?
+    private var lifecycleState: StreamDeckServerLifecycleState = .stopped
 
     public init(
         discoveryStore: StreamDeckDiscoveryStore = .init(),
@@ -31,19 +30,49 @@ public final class StreamDeckControlServer: @unchecked Sendable {
     }
 
     public func start() async throws {
-        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        let shouldStart = lifecycleLock.withLock {
-            if listener != nil {
-                return false
+        while true {
+            let startTask: Task<StreamDeckServerResources, Error> = lifecycleLock.withLock {
+                switch lifecycleState {
+                case .started:
+                    return Task { throw StreamDeckControlServerError.alreadyStarted }
+                case .starting(let task):
+                    return task
+                case .stopping(let task):
+                    return Task {
+                        try await task.value
+                        throw StreamDeckControlServerError.retryStart
+                    }
+                case .stopped:
+                    let task = Task { try await self.createResources() }
+                    lifecycleState = .starting(task)
+                    return task
+                }
             }
-            self.group = group
-            return true
+            do {
+                let resources = try await startTask.value
+                lifecycleLock.withLock {
+                    if case .starting = lifecycleState {
+                        lifecycleState = .started(resources)
+                    }
+                }
+                return
+            } catch StreamDeckControlServerError.alreadyStarted {
+                return
+            } catch StreamDeckControlServerError.retryStart {
+                continue
+            } catch {
+                lifecycleLock.withLock {
+                    if case .starting = lifecycleState {
+                        lifecycleState = .stopped
+                    }
+                }
+                throw error
+            }
         }
-        if !shouldStart {
-            try await group.shutdownGracefullyAsync()
-            return
-        }
+    }
 
+    private func createResources() async throws -> StreamDeckServerResources {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: 1 << 20,
             automaticErrorHandling: true,
@@ -56,6 +85,7 @@ public final class StreamDeckControlServer: @unchecked Sendable {
             },
             upgradePipelineHandler: { [clients, commandHandler, statusProvider, diagnostics] channel, _ in
                 let clientID = UUID()
+                let processor = StreamDeckClientMessageProcessor()
                 let registration = channel.eventLoop.makePromise(of: Void.self)
                 Task {
                     await clients.register(id: clientID, channel: channel)
@@ -66,6 +96,7 @@ public final class StreamDeckControlServer: @unchecked Sendable {
                         StreamDeckWebSocketFrameHandler(
                             clientID: clientID,
                             clients: clients,
+                            processor: processor,
                             commandHandler: commandHandler,
                             statusProvider: statusProvider,
                             diagnostics: diagnostics
@@ -74,14 +105,19 @@ public final class StreamDeckControlServer: @unchecked Sendable {
                 }
             }
         )
-        let upgradeConfiguration: NIOHTTPServerUpgradeSendableConfiguration = (
-            upgraders: [upgrader],
-            completionHandler: { _ in }
-        )
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
-                channel.pipeline.configureHTTPServerPipeline(withServerUpgrade: upgradeConfiguration)
+                let rejectHandler = StreamDeckHTTPRejectHandler(diagnostics: self.diagnostics)
+                let upgradeConfiguration: NIOHTTPServerUpgradeSendableConfiguration = (
+                    upgraders: [upgrader],
+                    completionHandler: { context in
+                        context.pipeline.removeHandler(rejectHandler, promise: nil)
+                    }
+                )
+                return channel.pipeline.configureHTTPServerPipeline(withServerUpgrade: upgradeConfiguration).flatMap {
+                    channel.pipeline.addHandler(rejectHandler)
+                }
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
@@ -99,51 +135,105 @@ public final class StreamDeckControlServer: @unchecked Sendable {
                     generatedAt: Date()
                 )
             )
-            lifecycleLock.withLock {
-                listener = channel
-            }
             diagnostics("streamdeck.server.started")
+            return StreamDeckServerResources(group: group, listener: channel)
         } catch {
             diagnostics("streamdeck.server.start.failed")
             try? await clients.closeAll()
             try? await group.shutdownGracefullyAsync()
-            lifecycleLock.withLock {
-                if self.group === group {
-                    self.group = nil
-                    self.listener = nil
-                }
-            }
             throw error
         }
     }
 
     public func stop() async throws {
-        let state = lifecycleLock.withLock {
-            let state = (listener: self.listener, group: self.group)
-            self.listener = nil
-            self.group = nil
-            return state
+        let stopTask: Task<Void, Error>? = lifecycleLock.withLock {
+            switch lifecycleState {
+            case .stopped:
+                return nil
+            case .stopping(let task):
+                return task
+            case .started(let resources):
+                let task = Task { try await self.closeResources(resources) }
+                lifecycleState = .stopping(task)
+                return task
+            case .starting(let startTask):
+                let task = Task {
+                    do {
+                        let resources = try await startTask.value
+                        try await self.closeResources(resources)
+                    } catch {
+                        try? self.discoveryStore.removeIfOwned(by: ProcessInfo.processInfo.processIdentifier)
+                        throw error
+                    }
+                }
+                lifecycleState = .stopping(task)
+                return task
+            }
         }
 
-        try await clients.closeAll()
-        if let listener = state.listener {
-            try await listener.close().get()
+        guard let stopTask else {
+            return
         }
-        if let group = state.group {
-            try await group.shutdownGracefullyAsync()
+        defer {
+            lifecycleLock.withLock {
+                if case .stopping = lifecycleState {
+                    lifecycleState = .stopped
+                }
+            }
         }
-        try discoveryStore.removeIfOwned(by: ProcessInfo.processInfo.processIdentifier)
-        diagnostics("streamdeck.server.stopped")
+        try await stopTask.value
     }
 
     public func publishStatus() async {
         let status = await statusProvider()
         await clients.broadcast(.status(StreamDeckStatusMessage(status: status)), diagnostics: diagnostics)
     }
+
+    private func closeResources(_ resources: StreamDeckServerResources) async throws {
+        var firstError: Error?
+        do {
+            try await clients.closeAll()
+        } catch {
+            firstError = firstError ?? error
+        }
+        do {
+            try await resources.listener.close().get()
+        } catch {
+            firstError = firstError ?? error
+        }
+        do {
+            try await resources.group.shutdownGracefullyAsync()
+        } catch {
+            firstError = firstError ?? error
+        }
+        do {
+            try discoveryStore.removeIfOwned(by: ProcessInfo.processInfo.processIdentifier)
+        } catch {
+            firstError = firstError ?? error
+        }
+        diagnostics("streamdeck.server.stopped")
+        if let firstError {
+            throw firstError
+        }
+    }
 }
 
 private enum StreamDeckControlServerError: Error {
     case missingBoundPort
+    case alreadyStarted
+    case retryStart
+}
+
+private struct StreamDeckServerResources: @unchecked Sendable {
+    let group: MultiThreadedEventLoopGroup
+    let listener: Channel
+}
+
+private enum StreamDeckServerLifecycleState {
+    case stopped
+    case starting(Task<StreamDeckServerResources, Error>)
+    case started(StreamDeckServerResources)
+    case stopping(Task<Void, Error>)
 }
 
 private actor StreamDeckClientRegistry {
@@ -248,12 +338,26 @@ private actor StreamDeckClientRegistry {
     }
 }
 
+private actor StreamDeckClientMessageProcessor {
+    private var tail: Task<Void, Never>?
+
+    func enqueue(_ operation: @escaping @Sendable () async -> Void) {
+        let previous = tail
+        let next = Task {
+            await previous?.value
+            await operation()
+        }
+        tail = next
+    }
+}
+
 private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
 
     private let clientID: UUID
     private let clients: StreamDeckClientRegistry
+    private let processor: StreamDeckClientMessageProcessor
     private let commandHandler: StreamDeckControlServer.CommandHandler
     private let statusProvider: StreamDeckControlServer.StatusProvider
     private let diagnostics: StreamDeckControlServer.DiagnosticsHandler
@@ -261,12 +365,14 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
     init(
         clientID: UUID,
         clients: StreamDeckClientRegistry,
+        processor: StreamDeckClientMessageProcessor,
         commandHandler: @escaping StreamDeckControlServer.CommandHandler,
         statusProvider: @escaping StreamDeckControlServer.StatusProvider,
         diagnostics: @escaping StreamDeckControlServer.DiagnosticsHandler
     ) {
         self.clientID = clientID
         self.clients = clients
+        self.processor = processor
         self.commandHandler = commandHandler
         self.statusProvider = statusProvider
         self.diagnostics = diagnostics
@@ -276,6 +382,10 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
         let frame = unwrapInboundIn(data)
         switch frame.opcode {
         case .text:
+            guard frame.fin else {
+                reject("streamdeck.websocket.reject.fragmented_frame")
+                return
+            }
             var frameData = frame.unmaskedData
             guard let text = frameData.readString(length: frameData.readableBytes) else {
                 reject("streamdeck.websocket.reject.text_decoding")
@@ -283,12 +393,15 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
             }
             handleText(text)
         case .ping:
-            let pong = WebSocketFrame(fin: true, opcode: .pong, data: frame.data)
+            let pongData = frame.unmaskedData
+            let pong = WebSocketFrame(fin: true, opcode: .pong, data: pongData)
             context.writeAndFlush(wrapOutboundOut(pong), promise: nil)
         case .pong:
             break
         case .connectionClose:
             Task { await clients.close(id: clientID, diagnostics: diagnostics) }
+        case .continuation:
+            reject("streamdeck.websocket.reject.fragmented_frame")
         default:
             reject("streamdeck.websocket.reject.unsupported_frame")
         }
@@ -306,11 +419,13 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
             return
         }
 
-        Task {
+        Task { [processor] in
+            await processor.enqueue { [clientID, clients, commandHandler, statusProvider, diagnostics] in
             switch message {
             case .hello(let hello):
                 guard hello.protocolVersion == streamDeckProtocolVersion else {
-                    await rejectAsync("streamdeck.websocket.reject.protocol_version")
+                    diagnostics("streamdeck.websocket.reject.protocol_version")
+                    await clients.close(id: clientID, diagnostics: diagnostics)
                     return
                 }
                 await clients.markHandshaken(id: clientID)
@@ -318,13 +433,15 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
                 await clients.send(.status(StreamDeckStatusMessage(status: status)), to: clientID, diagnostics: diagnostics)
             case .command(let request):
                 guard await clients.isHandshaken(id: clientID) else {
-                    await rejectAsync("streamdeck.websocket.reject.command_before_hello")
+                    diagnostics("streamdeck.websocket.reject.command_before_hello")
+                    await clients.close(id: clientID, diagnostics: diagnostics)
                     return
                 }
                 let result = await commandHandler(request)
                 await clients.send(.commandResult(result), to: clientID, diagnostics: diagnostics)
                 let status = await statusProvider()
                 await clients.send(.status(StreamDeckStatusMessage(status: status)), to: clientID, diagnostics: diagnostics)
+            }
             }
         }
     }
@@ -338,6 +455,35 @@ private final class StreamDeckWebSocketFrameHandler: ChannelInboundHandler, @unc
     private func rejectAsync(_ diagnostic: String) async {
         diagnostics(diagnostic)
         await clients.close(id: clientID, diagnostics: diagnostics)
+    }
+}
+
+private final class StreamDeckHTTPRejectHandler: ChannelInboundHandler, RemovableChannelHandler, @unchecked Sendable {
+    typealias InboundIn = HTTPServerRequestPart
+    typealias OutboundOut = HTTPServerResponsePart
+
+    private let diagnostics: StreamDeckControlServer.DiagnosticsHandler
+
+    init(diagnostics: @escaping StreamDeckControlServer.DiagnosticsHandler) {
+        self.diagnostics = diagnostics
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        switch unwrapInboundIn(data) {
+        case .head:
+            diagnostics("streamdeck.http.reject.request")
+        case .body:
+            break
+        case .end:
+            var headers = HTTPHeaders()
+            headers.add(name: "Content-Length", value: "0")
+            headers.add(name: "Connection", value: "close")
+            let head = HTTPResponseHead(version: .http1_1, status: .notFound, headers: headers)
+            context.write(wrapOutboundOut(.head(head)), promise: nil)
+            context.write(wrapOutboundOut(.end(nil)), promise: nil)
+            context.flush()
+            context.close(promise: nil)
+        }
     }
 }
 

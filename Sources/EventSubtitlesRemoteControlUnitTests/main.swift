@@ -55,10 +55,37 @@ private actor DiagnosticsRecorder {
     }
 }
 
+private actor CommandDelayController {
+    private var delayedCommandIDs: Set<String>
+
+    init(delayedCommandIDs: Set<String>) {
+        self.delayedCommandIDs = delayedCommandIDs
+    }
+
+    func result(for request: StreamDeckCommandRequest) async -> StreamDeckCommandResult {
+        if delayedCommandIDs.contains(request.id) {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return StreamDeckCommandResult(id: request.id, accepted: true)
+    }
+}
+
+private enum WebSocketUpgradeResult: Equatable {
+    case upgraded
+    case rejected(statusLine: String)
+}
+
 private final class TestWebSocketClient: @unchecked Sendable {
     private var socketFD: Int32 = -1
 
     func connect(port: Int, path: String = "/streamdeck/v1") async throws {
+        let result = try await connectForUpgradeResult(port: port, path: path)
+        guard result == .upgraded else {
+            throw TestFailure("websocket upgrade failed")
+        }
+    }
+
+    func connectForUpgradeResult(port: Int, path: String = "/streamdeck/v1") async throws -> WebSocketUpgradeResult {
         socketFD = socket(AF_INET, SOCK_STREAM, 0)
         guard socketFD >= 0 else {
             throw TestFailure("failed to create socket")
@@ -90,9 +117,15 @@ private final class TestWebSocketClient: @unchecked Sendable {
             "\r\n"
         try writeAll(Array(request.utf8))
         let response = try readHTTPResponse()
-        guard response.contains(" 101 ") else {
-            throw TestFailure("websocket upgrade failed")
+        guard let statusLine = response.components(separatedBy: "\r\n").first else {
+            throw TestFailure("websocket upgrade response had no status line")
         }
+        if statusLine.contains(" 101 ") {
+            return .upgraded
+        }
+        Darwin.close(socketFD)
+        socketFD = -1
+        return .rejected(statusLine: statusLine)
     }
 
     func send(_ message: StreamDeckIncomingMessage) async throws {
@@ -101,6 +134,12 @@ private final class TestWebSocketClient: @unchecked Sendable {
             throw TestFailure("encoded message was not UTF-8")
         }
         try await sendRawText(text)
+    }
+
+    func send(_ messages: [StreamDeckIncomingMessage]) async throws {
+        for message in messages {
+            try await send(message)
+        }
     }
 
     func sendRawText(_ text: String) async throws {
@@ -116,6 +155,35 @@ private final class TestWebSocketClient: @unchecked Sendable {
             byte ^ mask[index % mask.count]
         }
         try writeAll([0x81, 0x80 | UInt8(payload.count)] + mask + maskedPayload)
+    }
+
+    func sendMaskedPing(payload: [UInt8]) throws {
+        guard payload.count < 126 else {
+            throw TestFailure("test ping payload too large")
+        }
+        let mask: [UInt8] = [0x05, 0x06, 0x07, 0x08]
+        let maskedPayload = payload.enumerated().map { index, byte in
+            byte ^ mask[index % mask.count]
+        }
+        try writeAll([0x89, 0x80 | UInt8(payload.count)] + mask + maskedPayload)
+    }
+
+    func sendFragmentedText(_ firstFragment: String, _ secondFragment: String) throws {
+        let mask: [UInt8] = [0x09, 0x0A, 0x0B, 0x0C]
+        try writeMaskedFrame(firstByte: 0x01, payload: Array(firstFragment.utf8), mask: mask)
+        try writeMaskedFrame(firstByte: 0x80, payload: Array(secondFragment.utf8), mask: mask)
+    }
+
+    func receivePongPayload() throws -> [UInt8] {
+        while true {
+            let opcode = try readFrameOpcode()
+            if opcode == 0xA {
+                return Array(lastFramePayload)
+            }
+            if opcode == 0x8 {
+                throw TestFailure("websocket closed before pong frame")
+            }
+        }
     }
 
     func receiveMessage(timeoutNanoseconds: UInt64 = 2_000_000_000) async throws -> StreamDeckOutgoingMessage {
@@ -231,6 +299,16 @@ private final class TestWebSocketClient: @unchecked Sendable {
             }
             offset += written
         }
+    }
+
+    private func writeMaskedFrame(firstByte: UInt8, payload: [UInt8], mask: [UInt8]) throws {
+        guard payload.count < 126 else {
+            throw TestFailure("test websocket payload too large")
+        }
+        let maskedPayload = payload.enumerated().map { index, byte in
+            byte ^ mask[index % mask.count]
+        }
+        try writeAll([firstByte, 0x80 | UInt8(payload.count)] + mask + maskedPayload)
     }
 }
 
@@ -870,6 +948,98 @@ private func testServerHelloCommandResultAndStatusFlow() async throws {
     try await server.stop()
 }
 
+private func testServerProcessesBackToBackHelloAndCommandInOrder() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let statusCounter = StatusCounter()
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: { await statusCounter.nextSnapshot() }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before back-to-back test")
+        return
+    }
+    let client = TestWebSocketClient()
+    try await client.connect(port: port)
+    defer { Task { await client.close() } }
+
+    try await client.send([
+        .hello(StreamDeckHello(pluginVersion: "test-plugin")),
+        .command(StreamDeckCommandRequest(id: "back-to-back", command: .panicBlank))
+    ])
+
+    let helloStatus = try await client.receiveMessage()
+    let result = try await client.receiveMessage()
+    let commandStatus = try await client.receiveMessage()
+    expect(
+        helloStatus == .status(StreamDeckStatusMessage(status: testStatusSnapshot(segmentCount: 1))),
+        "back-to-back hello and command should first receive the hello status"
+    )
+    expect(
+        result == .commandResult(StreamDeckCommandResult(id: "back-to-back", accepted: true)),
+        "back-to-back hello and command should then receive command result"
+    )
+    expect(
+        commandStatus == .status(StreamDeckStatusMessage(status: testStatusSnapshot(segmentCount: 2))),
+        "back-to-back hello and command should finally receive fresh command status"
+    )
+    try await server.stop()
+}
+
+private func testServerPreservesMultipleCommandResultStatusOrderWhenHandlersSuspend() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let statusCounter = StatusCounter()
+    let delays = CommandDelayController(delayedCommandIDs: ["slow"])
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in await delays.result(for: request) },
+        statusProvider: { await statusCounter.nextSnapshot() }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before command ordering test")
+        return
+    }
+    let client = TestWebSocketClient()
+    try await client.connect(port: port)
+    defer { Task { await client.close() } }
+    try await client.send(.hello(StreamDeckHello(pluginVersion: "test-plugin")))
+    _ = try await client.receiveMessage()
+
+    try await client.send([
+        .command(StreamDeckCommandRequest(id: "slow", command: .panicBlank)),
+        .command(StreamDeckCommandRequest(id: "fast", command: .clearCaptions))
+    ])
+
+    let slowResult = try await client.receiveMessage()
+    let slowStatus = try await client.receiveMessage()
+    let fastResult = try await client.receiveMessage()
+    let fastStatus = try await client.receiveMessage()
+    expect(
+        slowResult == .commandResult(StreamDeckCommandResult(id: "slow", accepted: true)),
+        "first command result should be sent before later command result even if its handler suspends"
+    )
+    expect(
+        slowStatus == .status(StreamDeckStatusMessage(status: testStatusSnapshot(segmentCount: 2))),
+        "first command status should be sent before later command result"
+    )
+    expect(
+        fastResult == .commandResult(StreamDeckCommandResult(id: "fast", accepted: true)),
+        "second command result should follow first command status"
+    )
+    expect(
+        fastStatus == .status(StreamDeckStatusMessage(status: testStatusSnapshot(segmentCount: 3))),
+        "second command should receive its fresh status last"
+    )
+    try await server.stop()
+}
+
 private func testServerRejectsWrongPathOrProtocol() async throws {
     let (rootURL, store) = temporaryDiscoveryStore()
     defer { try? FileManager.default.removeItem(at: rootURL) }
@@ -885,15 +1055,12 @@ private func testServerRejectsWrongPathOrProtocol() async throws {
         return
     }
 
-    let wrongPathClient = TestWebSocketClient()
-    do {
-        try await wrongPathClient.connect(port: port, path: "/wrong")
-        defer { Task { await wrongPathClient.close() } }
-        try await wrongPathClient.send(.hello(StreamDeckHello(pluginVersion: "test")))
-        try await wrongPathClient.waitForClose()
-    } catch {
-        // Expected: the upgrade may be rejected before a websocket is established.
+    let wrongPathResult = try await TestWebSocketClient().connectForUpgradeResult(port: port, path: "/wrong")
+    guard case .rejected(let statusLine) = wrongPathResult else {
+        expect(false, "server should reject websocket upgrades on the wrong path")
+        return
     }
+    expect(statusLine.contains(" 400 ") || statusLine.contains(" 404 "), "wrong-path upgrade should receive a non-101 HTTP rejection")
 
     let wrongProtocolClient = TestWebSocketClient()
     try await wrongProtocolClient.connect(port: port)
@@ -901,6 +1068,100 @@ private func testServerRejectsWrongPathOrProtocol() async throws {
     try await wrongProtocolClient.send(.hello(StreamDeckHello(protocolVersion: streamDeckProtocolVersion + 1, pluginVersion: "test")))
     try await wrongProtocolClient.waitForClose()
     try await server.stop()
+}
+
+private func testServerRepliesToMaskedPingWithUnmaskedPongPayload() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: { testStatusSnapshot() }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before ping test")
+        return
+    }
+    let client = TestWebSocketClient()
+    try await client.connect(port: port)
+    defer { Task { await client.close() } }
+
+    let payload: [UInt8] = Array("ping-payload".utf8)
+    try client.sendMaskedPing(payload: payload)
+    expect(try client.receivePongPayload() == payload, "masked ping should receive an unmasked pong payload")
+    try await server.stop()
+}
+
+private func testServerRejectsFragmentedTextFramesForV1() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let diagnostics = DiagnosticsRecorder()
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: { testStatusSnapshot() },
+        diagnostics: { message in Task { await diagnostics.append(message) } }
+    )
+    try await server.start()
+
+    guard let port = try store.read()?.port else {
+        expect(false, "server should publish a discovery port before fragmentation test")
+        return
+    }
+    let client = TestWebSocketClient()
+    try await client.connect(port: port)
+    defer { Task { await client.close() } }
+    try client.sendFragmentedText(#"{"type":"hello","#, #""protocolVersion":1,"pluginVersion":"test"}"#)
+    try await client.waitForClose()
+    let diagnosticValues = await diagnostics.values()
+    expect(
+        diagnosticValues.contains("streamdeck.websocket.reject.fragmented_frame"),
+        "v1 fragmented text frames should be explicitly rejected with a safe diagnostic"
+    )
+    try await server.stop()
+}
+
+private func testConcurrentStartAndStopConvergesAndRemovesDiscovery() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let diagnostics = DiagnosticsRecorder()
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: { testStatusSnapshot() },
+        diagnostics: { message in Task { await diagnostics.append(message) } }
+    )
+
+    async let firstStart: Void = server.start()
+    async let secondStart: Void = server.start()
+    _ = try await (firstStart, secondStart)
+    try await server.stop()
+
+    let starts = await diagnostics.values().filter { $0 == "streamdeck.server.started" }
+    expect(starts.count == 1, "concurrent start calls should create exactly one listener")
+    expect(try store.read() == nil, "stop after concurrent start should remove owned discovery")
+}
+
+private func testStopWhileStartIsInFlightConvergesWithoutOwnedDiscovery() async throws {
+    let (rootURL, store) = temporaryDiscoveryStore()
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let server = StreamDeckControlServer(
+        discoveryStore: store,
+        commandHandler: { request in StreamDeckCommandResult(id: request.id, accepted: true) },
+        statusProvider: { testStatusSnapshot() }
+    )
+
+    async let startResult: Void = server.start()
+    async let stopResult: Void = server.stop()
+    do {
+        _ = try await (startResult, stopResult)
+    } catch {
+        // The start side may observe the stop race, but cleanup still must converge.
+    }
+    try await server.stop()
+    expect(try store.read() == nil, "stop racing an in-flight start should not leave owned discovery")
 }
 
 private func testPublishStatusBroadcastsToEstablishedClient() async throws {
@@ -1019,7 +1280,13 @@ do {
     }
     try await testServerPublishesDynamicLoopbackDiscoveryAndRemovesOwnedRecordOnStop()
     try await testServerHelloCommandResultAndStatusFlow()
+    try await testServerProcessesBackToBackHelloAndCommandInOrder()
+    try await testServerPreservesMultipleCommandResultStatusOrderWhenHandlersSuspend()
     try await testServerRejectsWrongPathOrProtocol()
+    try await testServerRepliesToMaskedPingWithUnmaskedPongPayload()
+    try await testServerRejectsFragmentedTextFramesForV1()
+    try await testConcurrentStartAndStopConvergesAndRemovesDiscovery()
+    try await testStopWhileStartIsInFlightConvergesWithoutOwnedDiscovery()
     try await testPublishStatusBroadcastsToEstablishedClient()
     print("PASS: Stream Deck remote control protocol")
 } catch {
