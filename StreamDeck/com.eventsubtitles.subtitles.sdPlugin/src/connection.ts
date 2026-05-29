@@ -17,6 +17,7 @@ import {
   outputStates,
   pluginVersion,
   protocolVersion,
+  rejectionReasons,
   sessionStates
 } from "./protocol.js";
 
@@ -87,7 +88,13 @@ export function validateDiscoveryRecord(value: unknown): DiscoveryRecord {
   if (typeof processID !== "number" || !Number.isInteger(processID)) {
     throw new Error("unsupported process id");
   }
+  if (processID <= 0) {
+    throw new Error("unsupported process id");
+  }
   if (typeof value.generatedAt !== "string") {
+    throw new Error("unsupported generatedAt");
+  }
+  if (Number.isNaN(Date.parse(value.generatedAt))) {
     throw new Error("unsupported generatedAt");
   }
 
@@ -109,7 +116,7 @@ export class StreamDeckConnection {
   private socket: SocketLike | undefined;
   private failureCount = 0;
   private reconnectScheduled = false;
-  private currentStatus: Status | undefined;
+  private latestStatus: Status | undefined;
 
   constructor(options: StreamDeckConnectionOptions = {}) {
     this.discoveryPath = options.discoveryPath ?? defaultDiscoveryPath;
@@ -125,13 +132,20 @@ export class StreamDeckConnection {
 
   onStatus(listener: StatusListener): () => void {
     this.listeners.add(listener);
+    if (this.latestStatus !== undefined) {
+      listener(this.latestStatus);
+    }
     return () => {
       this.listeners.delete(listener);
     };
   }
 
+  get currentStatus(): Status | undefined {
+    return this.latestStatus;
+  }
+
   connect(): void {
-    if (this.socket && this.isSocketOpen(this.socket)) {
+    if (this.socket) {
       return;
     }
 
@@ -147,7 +161,7 @@ export class StreamDeckConnection {
     const socket = this.socketFactory(`ws://127.0.0.1:${record.port}/streamdeck/v1`);
     this.socket = socket;
     socket.on("open", () => this.handleOpen(socket));
-    socket.on("message", (data) => this.handleMessage(data));
+    socket.on("message", (data) => this.handleMessage(socket, data));
     socket.on("close", () => this.handleDisconnect(socket));
     socket.on("error", () => this.handleDisconnect(socket));
   }
@@ -183,7 +197,10 @@ export class StreamDeckConnection {
     socket.send(JSON.stringify(hello));
   }
 
-  private handleMessage(data: unknown): void {
+  private handleMessage(socket: SocketLike, data: unknown): void {
+    if (this.socket !== socket) {
+      return;
+    }
     const message = parseIncomingMessage(data);
     if (!message) {
       this.closeCurrentSocket();
@@ -191,7 +208,9 @@ export class StreamDeckConnection {
       this.queueReconnect();
       return;
     }
-    this.setStatus(message.status);
+    if (message.type === "status") {
+      this.setStatus(message.status);
+    }
   }
 
   private handleDisconnect(socket: SocketLike): void {
@@ -218,10 +237,10 @@ export class StreamDeckConnection {
   }
 
   private setStatus(status: Status | undefined): void {
-    if (this.currentStatus === status) {
+    if (this.latestStatus === status) {
       return;
     }
-    this.currentStatus = status;
+    this.latestStatus = status;
     for (const listener of this.listeners) {
       listener(status);
     }
@@ -252,12 +271,22 @@ function parseIncomingMessage(data: unknown): IncomingMessage | undefined {
       return undefined;
     }
     const value = JSON.parse(raw) as unknown;
-    if (!isRecord(value) || value.type !== "status" || value.protocolVersion !== protocolVersion) {
+    if (!isRecord(value)) {
       return undefined;
     }
+
+    if (value.type === "commandResult") {
+      return parseCommandResult(value);
+    }
+
+    if (value.type !== "status" || value.protocolVersion !== protocolVersion) {
+      return undefined;
+    }
+
     if (!isStatus(value.status)) {
       return undefined;
     }
+
     return {
       type: "status",
       protocolVersion,
@@ -266,6 +295,34 @@ function parseIncomingMessage(data: unknown): IncomingMessage | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseCommandResult(value: Record<string, unknown>): IncomingMessage | undefined {
+  if (typeof value.id !== "string" || typeof value.accepted !== "boolean") {
+    return undefined;
+  }
+  if (value.reason !== undefined && !isOneOf(value.reason, rejectionReasons)) {
+    return undefined;
+  }
+  if (value.accepted) {
+    if (value.reason !== undefined) {
+      return undefined;
+    }
+    return {
+      type: "commandResult",
+      id: value.id,
+      accepted: true
+    };
+  }
+  if (value.reason === undefined) {
+    return undefined;
+  }
+  return {
+    type: "commandResult",
+    id: value.id,
+    accepted: false,
+    reason: value.reason
+  };
 }
 
 function dataToString(data: unknown): string | undefined {

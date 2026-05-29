@@ -14,6 +14,7 @@ import {
 class FakeSocket {
   static readonly OPEN = 1;
 
+  closeCount = 0;
   readonly sent: string[] = [];
   readyState = 0;
   private readonly handlers = new Map<string, Array<(value?: unknown) => void>>();
@@ -41,8 +42,13 @@ class FakeSocket {
   }
 
   close(): void {
+    this.closeCount += 1;
     this.readyState = 3;
     this.emit("close");
+  }
+
+  error(): void {
+    this.emit("error");
   }
 
   private emit(event: string, value?: unknown): void {
@@ -100,6 +106,10 @@ describe("Stream Deck connection protocol", () => {
     expect(() => validateDiscoveryRecord(validDiscovery({ protocolVersion: 2 }))).toThrow(
       /unsupported protocol/
     );
+    expect(() => validateDiscoveryRecord(validDiscovery({ generatedAt: "not-a-date" }))).toThrow(
+      /generatedAt/
+    );
+    expect(() => validateDiscoveryRecord(validDiscovery({ processID: 0 }))).toThrow(/process id/);
   });
 
   test("command send is no-op while offline and sends a JSON command with id while open", () => {
@@ -154,5 +164,169 @@ describe("Stream Deck connection protocol", () => {
     socket?.close();
 
     expect(received).toEqual([status({ elapsedText: "00:04" }), undefined]);
+  });
+
+  test("commandResult frames are accepted without disconnecting", () => {
+    let socket: FakeSocket | undefined;
+    const reconnects: number[] = [];
+    const connection = new StreamDeckConnection({
+      discoveryPath: discoveryPath(validDiscovery()),
+      socketFactory: (url) => {
+        socket = new FakeSocket(url);
+        return socket;
+      },
+      scheduleReconnect: (delay) => {
+        reconnects.push(delay);
+      }
+    });
+
+    connection.connect();
+    socket?.open();
+    socket?.message(
+      JSON.stringify({
+        type: "commandResult",
+        id: "command-1",
+        accepted: true
+      })
+    );
+
+    expect(socket?.closeCount).toBe(0);
+    expect(reconnects).toEqual([]);
+  });
+
+  test("malformed server message closes the socket and schedules reconnect once", () => {
+    let socket: FakeSocket | undefined;
+    const reconnects: number[] = [];
+    const connection = new StreamDeckConnection({
+      discoveryPath: discoveryPath(validDiscovery()),
+      socketFactory: (url) => {
+        socket = new FakeSocket(url);
+        return socket;
+      },
+      scheduleReconnect: (delay) => {
+        reconnects.push(delay);
+      }
+    });
+
+    connection.connect();
+    socket?.open();
+    socket?.message("{");
+
+    expect(socket?.closeCount).toBe(1);
+    expect(reconnects).toEqual([1000]);
+  });
+
+  test("duplicate connect while connecting does not create multiple live sockets", () => {
+    const sockets: FakeSocket[] = [];
+    const connection = new StreamDeckConnection({
+      discoveryPath: discoveryPath(validDiscovery()),
+      socketFactory: (url) => {
+        const socket = new FakeSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+      scheduleReconnect: () => undefined
+    });
+
+    connection.connect();
+    connection.connect();
+
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]?.closeCount).toBe(0);
+  });
+
+  test("stale socket events do not affect the current connection", () => {
+    const sockets: FakeSocket[] = [];
+    const received: Array<Status | undefined> = [];
+    const connection = new StreamDeckConnection({
+      discoveryPath: discoveryPath(validDiscovery()),
+      socketFactory: (url) => {
+        const socket = new FakeSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+      scheduleReconnect: () => undefined
+    });
+
+    connection.onStatus((nextStatus) => received.push(nextStatus));
+    connection.connect();
+    sockets[0]?.open();
+    sockets[0]?.message(
+      JSON.stringify({
+        type: "status",
+        protocolVersion,
+        status: status({ elapsedText: "00:05" })
+      })
+    );
+    sockets[0]?.close();
+    connection.connect();
+    sockets[1]?.open();
+    sockets[0]?.message("{");
+    sockets[0]?.error();
+    sockets[0]?.close();
+
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1]?.closeCount).toBe(0);
+    expect(received).toEqual([status({ elapsedText: "00:05" }), undefined]);
+  });
+
+  test("reconnect is scheduled only once when a socket emits error and close", () => {
+    let socket: FakeSocket | undefined;
+    const reconnects: number[] = [];
+    const connection = new StreamDeckConnection({
+      discoveryPath: discoveryPath(validDiscovery()),
+      socketFactory: (url) => {
+        socket = new FakeSocket(url);
+        return socket;
+      },
+      scheduleReconnect: (delay) => {
+        reconnects.push(delay);
+      }
+    });
+
+    connection.connect();
+    socket?.open();
+    socket?.error();
+    socket?.close();
+
+    expect(reconnects).toEqual([1000]);
+  });
+
+  test("new status listeners replay the current status and can unsubscribe", () => {
+    let socket: FakeSocket | undefined;
+    const first: Array<Status | undefined> = [];
+    const replayed: Array<Status | undefined> = [];
+    const connection = new StreamDeckConnection({
+      discoveryPath: discoveryPath(validDiscovery()),
+      socketFactory: (url) => {
+        socket = new FakeSocket(url);
+        return socket;
+      },
+      scheduleReconnect: () => undefined
+    });
+    const current = status({ elapsedText: "00:06" });
+
+    connection.onStatus((nextStatus) => first.push(nextStatus));
+    connection.connect();
+    socket?.open();
+    socket?.message(
+      JSON.stringify({
+        type: "status",
+        protocolVersion,
+        status: current
+      })
+    );
+    const unsubscribe = connection.onStatus((nextStatus) => replayed.push(nextStatus));
+    unsubscribe();
+    socket?.message(
+      JSON.stringify({
+        type: "status",
+        protocolVersion,
+        status: status({ elapsedText: "00:07" })
+      })
+    );
+
+    expect(replayed).toEqual([current]);
+    expect(first).toHaveLength(2);
   });
 });

@@ -59,10 +59,28 @@ export type CommandMessage = {
   command: Command;
 };
 
+export const rejectionReasons = ["invalidState", "noExternalDisplay", "internalError"] as const;
+export type RejectionReason = (typeof rejectionReasons)[number];
+
+export type CommandAcceptedMessage = {
+  type: "commandResult";
+  id: string;
+  accepted: true;
+};
+
+export type CommandRejectedMessage = {
+  type: "commandResult";
+  id: string;
+  accepted: false;
+  reason: RejectionReason;
+};
+
+export type CommandResultMessage = CommandAcceptedMessage | CommandRejectedMessage;
+
 export type StatusMessage = {
   type: "status";
   protocolVersion: typeof protocolVersion;
   status: Status;
 };
 
-export type IncomingMessage = StatusMessage;
+export type IncomingMessage = CommandResultMessage | StatusMessage;
