@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "pack": "streamdeck pack . --output ../../build"
+    "pack": "streamdeck pack . --output ../../build --force"
   },
   "dependencies": {
     "@elgato/streamdeck": "^2.0.0",
