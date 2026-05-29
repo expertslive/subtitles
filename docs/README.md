@@ -6,6 +6,7 @@ EventSubtitles is a native macOS app for offline live subtitles and Dutch/Englis
 
 - [Architecture](architecture.md): runtime pipeline, model strategy, power management, and event priorities.
 - [Event runbook](event-runbook.md): pre-event checklist, recommended settings, live operation, and post-event files.
+- [Stream Deck integration](stream-deck.md): native plugin build, install, key setup, and operational behavior.
 - [Workspace tabs](workspace-tabs.md): implemented workspace layout and future notes for Live, Style, Glossary, Logs, Models, Translation, Audio, and Output.
 - [Lessons learned](lessons-learned.md): implementation decisions, operator UX findings, storage estimates, and known follow-ups.
 - [Release process](release-process.md): validation, publishing, and single-current-release policy.

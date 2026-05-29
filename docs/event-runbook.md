@@ -12,8 +12,9 @@
 8. Open the Glossary workspace and add, import, or bulk-paste the session glossary.
 9. Open the Output workspace, show the output window, and move it to the HDMI display.
 10. Use `Fill Display` and confirm the downstream video switcher keys the chroma green correctly.
-11. Leave `Keep Mac awake` enabled unless another venue power plan is managing the machine.
-12. Use the Settings window for deeper setup work if you need to adjust Style, Audio, Models, or Translation without changing the active workspace.
+11. If using Stream Deck, install the plugin, add the Event Subtitles actions, and confirm keys leave `APP OFFLINE` after the app is running.
+12. Leave `Keep Mac awake` enabled unless another venue power plan is managing the machine.
+13. Use the Settings window for deeper setup work if you need to adjust Style, Audio, Models, or Translation without changing the active workspace.
 
 ## Recommended Settings
 
@@ -42,8 +43,9 @@
 4. Watch the input meter and transcript preview.
 5. Use manual captions for emergency messages or sponsor/talk titles.
 6. Use Panic blank if the public output must disappear immediately.
-7. Keep Live visible while operating captions.
-8. Use Logs only when validating that segments are being recorded.
+7. Use Stream Deck only as a command/status surface; the app remains the authoritative state and should stay visible to the operator.
+8. Keep Live visible while operating captions.
+9. Use Logs only when validating that segments are being recorded.
 
 ## Workspace Guide
 

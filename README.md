@@ -10,6 +10,7 @@ Start with the documentation index in [docs/README.md](docs/README.md).
 
 - [Architecture](docs/architecture.md)
 - [Event runbook](docs/event-runbook.md)
+- [Stream Deck integration](docs/stream-deck.md)
 - [Lessons learned](docs/lessons-learned.md)
 - [Release process](docs/release-process.md)
 
