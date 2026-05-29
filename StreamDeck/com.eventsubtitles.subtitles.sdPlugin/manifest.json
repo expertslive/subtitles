@@ -1,0 +1,204 @@
+{
+  "$schema": "node_modules/@elgato/schemas/streamdeck/plugins/manifest.json",
+  "Name": "Event Subtitles",
+  "Version": "1.0.0.0",
+  "Author": "Event Subtitles",
+  "Actions": [
+    {
+      "Name": "Start Session",
+      "UUID": "com.eventsubtitles.subtitles.start-session",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Ask the Event Subtitles app to start a session.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/ready",
+          "Title": "START\nSESSION",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Stop Session",
+      "UUID": "com.eventsubtitles.subtitles.stop-session",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Ask the Event Subtitles app to stop the current session.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/disabled",
+          "Title": "STOP\nSESSION",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Panic Blank",
+      "UUID": "com.eventsubtitles.subtitles.panic-blank",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Ask the Event Subtitles app to blank subtitle output.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/warning",
+          "Title": "PANIC\nBLANK",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Unblank Output",
+      "UUID": "com.eventsubtitles.subtitles.unblank-output",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Ask the Event Subtitles app to resume subtitle output.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/ready",
+          "Title": "UNBLANK\nOUTPUT",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Clear Captions",
+      "UUID": "com.eventsubtitles.subtitles.clear-captions",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Ask the Event Subtitles app to clear displayed captions.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/ready",
+          "Title": "CLEAR\nCAPTIONS",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Fill External Display",
+      "UUID": "com.eventsubtitles.subtitles.fill-external-display",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Ask the Event Subtitles app to fill the external display.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/ready",
+          "Title": "FILL\nDISPLAY",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Restore Output Window",
+      "UUID": "com.eventsubtitles.subtitles.restore-output-window",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Ask the Event Subtitles app to restore the output window.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/ready",
+          "Title": "RESTORE\nWINDOW",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Health",
+      "UUID": "com.eventsubtitles.subtitles.health",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Shows Event Subtitles audio and app health.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/keys/disabled",
+          "Title": "APP OFFLINE",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Session Status",
+      "UUID": "com.eventsubtitles.subtitles.session",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Shows Event Subtitles session status.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/keys/disabled",
+          "Title": "APP OFFLINE",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Caption Activity",
+      "UUID": "com.eventsubtitles.subtitles.caption-activity",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Shows live caption activity status without transcript text.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/keys/disabled",
+          "Title": "APP OFFLINE",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    }
+  ],
+  "Category": "Event Subtitles",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "CodePath": "bin/plugin.js",
+  "Description": "Control and monitor Event Subtitles from Stream Deck.",
+  "Icon": "imgs/plugin/marketplace",
+  "SDKVersion": 3,
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "12"
+    }
+  ],
+  "Nodejs": {
+    "Version": "20"
+  },
+  "UUID": "com.eventsubtitles.subtitles"
+}

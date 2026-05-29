@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Event Subtitles">
+  <rect width="512" height="512" rx="96" fill="#123d5a"/>
+  <rect x="88" y="144" width="336" height="224" rx="34" fill="#f4f7fb"/>
+  <rect x="128" y="210" width="164" height="28" fill="#123d5a"/>
+  <rect x="128" y="274" width="256" height="28" fill="#123d5a"/>
+  <rect x="318" y="210" width="66" height="28" fill="#2d7dd2"/>
+</svg>
