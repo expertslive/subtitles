@@ -35,20 +35,20 @@ final class AppState {
     }
     var sourceLanguage: SourceLanguage = .automatic
 
-    var isRunning = false
-    var isStarting = false
-    var audioLevel = 0.0
+    var isRunning = false { didSet { publishStreamDeckStatus() } }
+    var isStarting = false { didSet { publishStreamDeckStatus() } }
+    var audioLevel = 0.0 { didSet { publishStreamDeckStatus() } }
     var audioInputDevices: [AudioInputDeviceInfo] = []
     var selectedAudioInputDeviceID: String?
     var effectiveAudioInputDeviceID: String?
     var audioInputDescription = "Input unknown"
     var audioInputSelectionStatus = "Input unknown"
     var lastAudibleInputAt: Date?
-    var isSelectedAudioInputAvailable = false
-    var hasAudioCaptureFailure = false
-    var didFailToStartSession = false
+    var isSelectedAudioInputAvailable = false { didSet { publishStreamDeckStatus() } }
+    var hasAudioCaptureFailure = false { didSet { publishStreamDeckStatus() } }
+    var didFailToStartSession = false { didSet { publishStreamDeckStatus() } }
     var engineStatus = "Simulator idle"
-    var errorMessage: String?
+    var errorMessage: String? { didSet { publishStreamDeckStatus() } }
     var sessionName = "Main stage"
     var selectedWorkspace: OperatorWorkspace = .live
     var transcriptionEngine: TranscriptionEngineChoice = .simulator
@@ -65,6 +65,7 @@ final class AppState {
             if !publicCaptionText.isEmpty && publicCaptionText != oldValue {
                 lastCaptionActivityAt = Date()
             }
+            publishStreamDeckStatus()
         }
     }
     var captionLayout = CaptionLayout(lines: []) {
@@ -122,17 +123,17 @@ final class AppState {
     """
 
     var manualCaption = ""
-    var outputBlanked = false
+    var outputBlanked = false { didSet { publishStreamDeckStatus() } }
     var sessionLogStatus = "No active session"
     var sessionDirectoryPath: String?
-    var sessionSegmentCount = 0
-    var sessionElapsedText = "00:00:00"
+    var sessionSegmentCount = 0 { didSet { publishStreamDeckStatus() } }
+    var sessionElapsedText = "00:00:00" { didSet { publishStreamDeckStatus() } }
     var keepMacAwakeDuringSession = true
     var sleepPreventionStatus = "Awake ready"
     var appMemoryUsageText = "Unknown"
     var selectedOutputDisplayID: String?
-    var outputWindowVisible = false
-    var outputWindowFilled = false
+    var outputWindowVisible = false { didSet { publishStreamDeckStatus() } }
+    var outputWindowFilled = false { didSet { publishStreamDeckStatus() } }
     var outputWindowDisplayID: String?
     var isTestingAudio = false
     var audioTestResult: AudioTestRecordingResult?
@@ -156,9 +157,9 @@ final class AppState {
     @ObservationIgnored private var streamDeckControlServerStartTask: Task<Void, Never>?
     @ObservationIgnored private var activeCaptureStartAttempt: UUID?
     @ObservationIgnored private var runningCaptureSessionID: UUID?
-    @ObservationIgnored var sessionStartedAt: Date?
+    @ObservationIgnored var sessionStartedAt: Date? { didSet { publishStreamDeckStatus() } }
     @ObservationIgnored private var lastCaptionSnapshotAt: Date?
-    @ObservationIgnored var lastCaptionActivityAt: Date?
+    @ObservationIgnored var lastCaptionActivityAt: Date? { didSet { publishStreamDeckStatus() } }
     /// Pixel width of the live output window's render area. Set by SubtitleOutputView
     /// when it has `governsLayout: true`. Drives the `effectiveTargetCharactersPerLine`
     /// calculation so each logical line fits on one visual row at the chosen font.

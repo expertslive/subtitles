@@ -61,6 +61,28 @@ public enum StreamDeckStatusPolicy {
         guard !normalized.isEmpty else {
             return nil
         }
-        return String(normalized.prefix(120))
+        let label = normalized.split(separator: ":", maxSplits: 1).first.map(String.init) ?? normalized
+        if allowedErrorSummaries.contains(label) {
+            return label
+        }
+        return "App error"
     }
+
+    private static let allowedErrorSummaries: Set<String> = [
+        "App unavailable",
+        "App error",
+        "Audio capture unavailable",
+        "Audio capture restart failed",
+        "Audio device changed",
+        "Audio test recording failed",
+        "Glossary export failed",
+        "Glossary import failed",
+        "Session log save failed",
+        "Session log unavailable",
+        "Sleep prevention unavailable",
+        "Transcription unavailable",
+        "Translation failed",
+        "WhisperKit model prepare failed",
+        "WhisperKit unavailable"
+    ]
 }

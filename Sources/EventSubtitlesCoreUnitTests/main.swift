@@ -524,6 +524,39 @@ private func testStreamDeckFailureFactsTrackCaptureLifecycle() -> Bool {
     )
 }
 
+private func testAppStatePublishesStreamDeckStatusForLiveStateChanges() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
+        fputs("FAIL: AppState source should be readable\n", stderr)
+        return false
+    }
+
+    let publishedProperties = [
+        "var isRunning = false { didSet { publishStreamDeckStatus() } }",
+        "var isStarting = false { didSet { publishStreamDeckStatus() } }",
+        "var audioLevel = 0.0 { didSet { publishStreamDeckStatus() } }",
+        "var isSelectedAudioInputAvailable = false { didSet { publishStreamDeckStatus() } }",
+        "var hasAudioCaptureFailure = false { didSet { publishStreamDeckStatus() } }",
+        "var didFailToStartSession = false { didSet { publishStreamDeckStatus() } }",
+        "var errorMessage: String? { didSet { publishStreamDeckStatus() } }",
+        "var outputBlanked = false { didSet { publishStreamDeckStatus() } }",
+        "var sessionSegmentCount = 0 { didSet { publishStreamDeckStatus() } }",
+        #"var sessionElapsedText = "00:00:00" { didSet { publishStreamDeckStatus() } }"#,
+        "var outputWindowVisible = false { didSet { publishStreamDeckStatus() } }",
+        "var outputWindowFilled = false { didSet { publishStreamDeckStatus() } }",
+        "var sessionStartedAt: Date? { didSet { publishStreamDeckStatus() } }",
+        "var lastCaptionActivityAt: Date? { didSet { publishStreamDeckStatus() } }"
+    ]
+
+    return expectEqual(
+        publishedProperties.allSatisfy { source.contains($0) } &&
+            source.contains("publicCaptionText = \"\"") &&
+            source.contains("publicCaptionText = display") &&
+            source.contains("sessionElapsedText = String(format:"),
+        true,
+        "AppState should broadcast Stream Deck status when live status-driving state changes"
+    )
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -548,7 +581,8 @@ let tests = [
     ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
     ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),
     ("streamDeckStatusUsesTypedStateFacts", testStreamDeckStatusUsesTypedStateFacts),
-    ("streamDeckFailureFactsTrackCaptureLifecycle", testStreamDeckFailureFactsTrackCaptureLifecycle)
+    ("streamDeckFailureFactsTrackCaptureLifecycle", testStreamDeckFailureFactsTrackCaptureLifecycle),
+    ("appStatePublishesStreamDeckStatusForLiveStateChanges", testAppStatePublishesStreamDeckStatusForLiveStateChanges)
 ]
 
 var failed = 0

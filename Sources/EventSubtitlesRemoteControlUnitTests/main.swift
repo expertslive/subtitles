@@ -872,7 +872,7 @@ private func testAudioStatusProjection() {
         ) == .silent,
         "a real running session past grace with no signal should project as silent"
     )
-    let nonAudioErrorMessage = "Translation failed for selected language"
+    let nonAudioErrorMessage = "Translation failed: selected language unavailable"
     expect(StreamDeckStatusPolicy.errorSummary(nonAudioErrorMessage) != nil, "non-audio errors should remain displayable")
     expect(
         StreamDeckStatusPolicy.audioState(
@@ -906,14 +906,13 @@ private func testErrorSummaryProjection() {
     expect(StreamDeckStatusPolicy.errorSummary(nil) == nil, "nil error summaries should remain nil")
     expect(StreamDeckStatusPolicy.errorSummary(" \n\t ") == nil, "whitespace-only error summaries should be omitted")
     expect(
-        StreamDeckStatusPolicy.errorSummary("  Audio\t capture \n\n failed\t Try   another input  ") ==
-            "Audio capture failed Try another input",
-        "error summaries should collapse whitespace runs and trim whitespace"
+        StreamDeckStatusPolicy.errorSummary("Translation failed: speaker said sensitive transcript text") ==
+            "Translation failed",
+        "known error summaries should expose only sanitized category labels"
     )
-    let longMessage = String(repeating: "x", count: 121)
     expect(
-        StreamDeckStatusPolicy.errorSummary(longMessage) == String(repeating: "x", count: 120),
-        "error summaries should be capped to 120 characters"
+        StreamDeckStatusPolicy.errorSummary("speaker said sensitive transcript text") == "App error",
+        "unknown error summaries should not expose free-form text"
     )
 }
 
