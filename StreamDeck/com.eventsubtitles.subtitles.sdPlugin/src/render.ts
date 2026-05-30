@@ -12,6 +12,7 @@ export const pluginUUID = "com.eventsubtitles.subtitles";
 
 export const actionUUIDs = {
   sessionControl: `${pluginUUID}.session-control`,
+  panicControl: `${pluginUUID}.panic-control`,
   startSession: `${pluginUUID}.start-session`,
   stopSession: `${pluginUUID}.stop-session`,
   panicBlank: `${pluginUUID}.panic-blank`,
@@ -26,7 +27,7 @@ export const actionUUIDs = {
 
 export type ActionId = keyof typeof actionUUIDs;
 
-export type RenderStyle = "active" | "disabled" | "ready" | "warning";
+export type RenderStyle = "active" | "danger" | "disabled" | "ready" | "warning";
 
 export type KeyRender = {
   title: string;
@@ -48,6 +49,7 @@ const staticCommandByAction = {
 
 const imageByStyle = {
   active: "imgs/keys/active.svg",
+  danger: "imgs/keys/danger.svg",
   disabled: "imgs/keys/disabled.svg",
   ready: "imgs/keys/ready.svg",
   warning: "imgs/keys/warning.svg"
@@ -56,6 +58,9 @@ const imageByStyle = {
 export function commandForAction(action: ActionId, status?: Status): Command | undefined {
   if (action === "sessionControl") {
     return commandForSessionControl(status?.sessionState);
+  }
+  if (action === "panicControl") {
+    return commandForPanicControl(status?.outputState);
   }
   return staticCommandByAction[action as keyof typeof staticCommandByAction];
 }
@@ -83,6 +88,8 @@ export function renderKey(action: ActionId, status: Status | undefined): KeyRend
   switch (action) {
     case "sessionControl":
       return renderSessionControl(status.sessionState);
+    case "panicControl":
+      return renderPanicControl(status.outputState);
     case "startSession":
       return renderStartSession(status.sessionState);
     case "stopSession":
@@ -108,6 +115,19 @@ export function renderKey(action: ActionId, status: Status | undefined): KeyRend
   }
 }
 
+function commandForPanicControl(outputState: OutputState | undefined): Command | undefined {
+  switch (outputState) {
+    case "live":
+      return "panicBlank";
+    case "blanked":
+      return "unblankOutput";
+    case undefined:
+      return undefined;
+    default:
+      return exhaustive(outputState);
+  }
+}
+
 function commandForSessionControl(sessionState: SessionState | undefined): Command | undefined {
   switch (sessionState) {
     case "stopped":
@@ -129,7 +149,7 @@ function key(title: string, style: RenderStyle, enabled: boolean): KeyRender {
     image: imageByStyle[style],
     style,
     enabled,
-    state: style === "active" || style === "warning" ? 1 : 0
+    state: style === "active" || style === "danger" || style === "warning" ? 1 : 0
   };
 }
 
@@ -139,9 +159,9 @@ function renderStartSession(sessionState: SessionState): KeyRender {
     case "error":
       return key("START\nSESSION", "ready", true);
     case "starting":
-      return key("SESSION\nSTARTING", "warning", false);
+      return key("SESSION\nSTARTING", "ready", false);
     case "running":
-      return key("SESSION\nRUNNING", "active", false);
+      return key("SESSION\nRUNNING", "ready", false);
     default:
       return exhaustive(sessionState);
   }
@@ -153,7 +173,7 @@ function renderStopSession(sessionState: SessionState): KeyRender {
       return key("SESSION\nSTOPPED", "disabled", false);
     case "starting":
     case "running":
-      return key("STOP\nSESSION", "ready", true);
+      return key("STOP\nSESSION", "danger", true);
     case "error":
       return key("SESSION\nERROR", "disabled", false);
     default:
@@ -168,7 +188,7 @@ function renderSessionControl(sessionState: SessionState): KeyRender {
       return key("START\nSESSION", "ready", true);
     case "starting":
     case "running":
-      return key("STOP\nSESSION", "ready", true);
+      return key("STOP\nSESSION", "danger", true);
     default:
       return exhaustive(sessionState);
   }
@@ -177,9 +197,20 @@ function renderSessionControl(sessionState: SessionState): KeyRender {
 function renderPanicBlank(outputState: OutputState): KeyRender {
   switch (outputState) {
     case "live":
-      return key("PANIC\nBLANK", "warning", true);
+      return key("PANIC\nBLANK", "danger", true);
     case "blanked":
       return key("OUTPUT\nBLANKED", "disabled", false);
+    default:
+      return exhaustive(outputState);
+  }
+}
+
+function renderPanicControl(outputState: OutputState): KeyRender {
+  switch (outputState) {
+    case "live":
+      return key("PANIC\nBLANK", "danger", true);
+    case "blanked":
+      return key("UNBLANK\nOUTPUT", "ready", true);
     default:
       return exhaustive(outputState);
   }

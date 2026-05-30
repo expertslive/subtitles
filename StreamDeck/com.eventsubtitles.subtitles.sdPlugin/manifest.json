@@ -23,6 +23,24 @@
       ]
     },
     {
+      "Name": "Panic Control",
+      "UUID": "com.eventsubtitles.subtitles.panic-control",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Blank subtitle output, then unblank it on the next press.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/danger",
+          "Title": "PANIC\nBLANK",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
       "Name": "Start Session",
       "UUID": "com.eventsubtitles.subtitles.start-session",
       "Icon": "imgs/actions/subtitles/icon",

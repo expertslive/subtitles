@@ -73,12 +73,12 @@ describe("Stream Deck key rendering", () => {
 
     expect(renderKey("startSession", status({ sessionState: "running" }))).toMatchObject({
       title: "SESSION\nRUNNING",
-      style: "active",
+      style: "ready",
       enabled: false
     });
     expect(renderKey("stopSession", status({ sessionState: "running" }))).toMatchObject({
       title: "STOP\nSESSION",
-      style: "ready",
+      style: "danger",
       enabled: true
     });
   });
@@ -97,14 +97,14 @@ describe("Stream Deck key rendering", () => {
 
     expect(renderKey("sessionControl", starting)).toMatchObject({
       title: "STOP\nSESSION",
-      style: "ready",
+      style: "danger",
       enabled: true
     });
     expect(commandForAction("sessionControl", starting)).toBe("stopSession");
 
     expect(renderKey("sessionControl", running)).toMatchObject({
       title: "STOP\nSESSION",
-      style: "ready",
+      style: "danger",
       enabled: true
     });
     expect(commandForAction("sessionControl", running)).toBe("stopSession");
@@ -112,10 +112,31 @@ describe("Stream Deck key rendering", () => {
     expect(commandForAction("sessionControl", undefined)).toBeUndefined();
   });
 
+  test("panic control blanks and unblanks from authoritative output status", () => {
+    const live = status({ outputState: "live" });
+    const blanked = status({ outputState: "blanked" });
+
+    expect(renderKey("panicControl", live)).toMatchObject({
+      title: "PANIC\nBLANK",
+      style: "danger",
+      enabled: true
+    });
+    expect(commandForAction("panicControl", live)).toBe("panicBlank");
+
+    expect(renderKey("panicControl", blanked)).toMatchObject({
+      title: "UNBLANK\nOUTPUT",
+      style: "ready",
+      enabled: true
+    });
+    expect(commandForAction("panicControl", blanked)).toBe("unblankOutput");
+
+    expect(commandForAction("panicControl", undefined)).toBeUndefined();
+  });
+
   test("blank and unblank are explicit state-dependent commands, not toggles", () => {
     expect(renderKey("panicBlank", status({ outputState: "live" }))).toMatchObject({
       title: "PANIC\nBLANK",
-      style: "warning",
+      style: "danger",
       enabled: true
     });
     expect(renderKey("unblankOutput", status({ outputState: "live" }))).toMatchObject({
