@@ -11,6 +11,7 @@ import type {
 export const pluginUUID = "com.eventsubtitles.subtitles";
 
 export const actionUUIDs = {
+  sessionControl: `${pluginUUID}.session-control`,
   startSession: `${pluginUUID}.start-session`,
   stopSession: `${pluginUUID}.stop-session`,
   panicBlank: `${pluginUUID}.panic-blank`,
@@ -35,7 +36,7 @@ export type KeyRender = {
   state: 0 | 1;
 };
 
-const commandByAction = {
+const staticCommandByAction = {
   startSession: "startSession",
   stopSession: "stopSession",
   panicBlank: "panicBlank",
@@ -52,8 +53,11 @@ const imageByStyle = {
   warning: "imgs/keys/warning.svg"
 } as const satisfies Record<RenderStyle, string>;
 
-export function commandForAction(action: ActionId): Command | undefined {
-  return commandByAction[action as keyof typeof commandByAction];
+export function commandForAction(action: ActionId, status?: Status): Command | undefined {
+  if (action === "sessionControl") {
+    return commandForSessionControl(status?.sessionState);
+  }
+  return staticCommandByAction[action as keyof typeof staticCommandByAction];
 }
 
 export function actionIdForUUID(uuid: string): ActionId | undefined {
@@ -77,6 +81,8 @@ export function renderKey(action: ActionId, status: Status | undefined): KeyRend
   }
 
   switch (action) {
+    case "sessionControl":
+      return renderSessionControl(status.sessionState);
     case "startSession":
       return renderStartSession(status.sessionState);
     case "stopSession":
@@ -99,6 +105,21 @@ export function renderKey(action: ActionId, status: Status | undefined): KeyRend
       return renderCaptionActivity(status.captionState, status.displayedSegmentCount);
     default:
       return exhaustive(action);
+  }
+}
+
+function commandForSessionControl(sessionState: SessionState | undefined): Command | undefined {
+  switch (sessionState) {
+    case "stopped":
+    case "error":
+      return "startSession";
+    case "starting":
+    case "running":
+      return "stopSession";
+    case undefined:
+      return undefined;
+    default:
+      return exhaustive(sessionState);
   }
 }
 
@@ -135,6 +156,19 @@ function renderStopSession(sessionState: SessionState): KeyRender {
       return key("STOP\nSESSION", "ready", true);
     case "error":
       return key("SESSION\nERROR", "disabled", false);
+    default:
+      return exhaustive(sessionState);
+  }
+}
+
+function renderSessionControl(sessionState: SessionState): KeyRender {
+  switch (sessionState) {
+    case "stopped":
+    case "error":
+      return key("START\nSESSION", "ready", true);
+    case "starting":
+    case "running":
+      return key("STOP\nSESSION", "ready", true);
     default:
       return exhaustive(sessionState);
   }

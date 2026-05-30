@@ -83,6 +83,35 @@ describe("Stream Deck key rendering", () => {
     });
   });
 
+  test("session control chooses start or stop from authoritative app status", () => {
+    const stopped = status({ sessionState: "stopped" });
+    const starting = status({ sessionState: "starting" });
+    const running = status({ sessionState: "running" });
+
+    expect(renderKey("sessionControl", stopped)).toMatchObject({
+      title: "START\nSESSION",
+      style: "ready",
+      enabled: true
+    });
+    expect(commandForAction("sessionControl", stopped)).toBe("startSession");
+
+    expect(renderKey("sessionControl", starting)).toMatchObject({
+      title: "STOP\nSESSION",
+      style: "ready",
+      enabled: true
+    });
+    expect(commandForAction("sessionControl", starting)).toBe("stopSession");
+
+    expect(renderKey("sessionControl", running)).toMatchObject({
+      title: "STOP\nSESSION",
+      style: "ready",
+      enabled: true
+    });
+    expect(commandForAction("sessionControl", running)).toBe("stopSession");
+
+    expect(commandForAction("sessionControl", undefined)).toBeUndefined();
+  });
+
   test("blank and unblank are explicit state-dependent commands, not toggles", () => {
     expect(renderKey("panicBlank", status({ outputState: "live" }))).toMatchObject({
       title: "PANIC\nBLANK",

@@ -40,7 +40,7 @@ class SubtitlesAction extends SingletonAction {
   }
 
   async onKeyDown(ev: KeyDownEvent): Promise<void> {
-    const command = commandForAction(this.actionId);
+    const command = commandForAction(this.actionId, appConnection.currentStatus);
     if (!command) {
       return;
     }

@@ -5,6 +5,24 @@
   "Author": "Event Subtitles",
   "Actions": [
     {
+      "Name": "Session Control",
+      "UUID": "com.eventsubtitles.subtitles.session-control",
+      "Icon": "imgs/actions/subtitles/icon",
+      "Tooltip": "Start or stop the Event Subtitles session based on live app status.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/keys/ready",
+          "Title": "START\nSESSION",
+          "TitleAlignment": "middle",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
       "Name": "Start Session",
       "UUID": "com.eventsubtitles.subtitles.start-session",
       "Icon": "imgs/actions/subtitles/icon",
