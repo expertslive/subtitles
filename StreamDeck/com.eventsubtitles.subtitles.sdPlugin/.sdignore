@@ -16,3 +16,5 @@ node_modules/@elgato/*
 !node_modules/@elgato/utils/**
 !node_modules/ws/
 !node_modules/ws/**
+!node_modules/zod/
+!node_modules/zod/**
