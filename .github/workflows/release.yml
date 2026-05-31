@@ -46,7 +46,7 @@ jobs:
 
   test:
     name: Tests
-    runs-on: macos-14
+    runs-on: macos-15
     needs: resolve-version
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
 
   build-app:
     name: Build app bundle
-    runs-on: macos-14
+    runs-on: macos-15
     needs: [resolve-version, test]
     env:
       APP_VERSION: ${{ needs.resolve-version.outputs.app_version }}
@@ -100,7 +100,7 @@ jobs:
 
   build-plugin:
     name: Build Stream Deck plugin
-    runs-on: macos-14
+    runs-on: macos-15
     needs: [resolve-version, test]
     steps:
       - uses: actions/checkout@v4
