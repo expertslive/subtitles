@@ -59,4 +59,40 @@ url="$(resolve_base_url)"
   || fail "pinned base URL malformed, got: $url"
 pass "resolve_base_url pins to /download/<tag>/"
 
+
+# ---- idempotency check ----
+
+mock_plist() {
+  local dir="$1" version="$2"
+  mkdir -p "$dir/EventSubtitles.app/Contents"
+  cat > "$dir/EventSubtitles.app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleShortVersionString</key><string>${version}</string>
+</dict></plist>
+PLIST
+}
+
+tmpdir="$(mktemp -d -t install_test.XXXXXX)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+# No installed app: returns 1 (not installed)
+APPS_DIR="$tmpdir/empty" mkdir -p "$tmpdir/empty"
+APPS_DIR="$tmpdir/empty" is_already_installed "3.4.0" \
+  && fail "should report not-installed when no .app present"
+pass "is_already_installed returns false when nothing installed"
+
+# Installed but version mismatch: returns 1
+mock_plist "$tmpdir/v1" "3.3.0"
+APPS_DIR="$tmpdir/v1" is_already_installed "3.4.0" \
+  && fail "should report not-installed when versions differ"
+pass "is_already_installed returns false on version mismatch"
+
+# Installed and version matches: returns 0
+mock_plist "$tmpdir/v2" "3.4.0"
+APPS_DIR="$tmpdir/v2" is_already_installed "3.4.0" \
+  || fail "should report installed when versions match"
+pass "is_already_installed returns true on version match"
+
 echo "All install.sh tests passed."

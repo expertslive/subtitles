@@ -12,6 +12,7 @@ set -euo pipefail
 
 REPO_OWNER="expertslive"
 REPO_NAME="subtitles"
+APPS_DIR="${APPS_DIR:-/Applications}"
 
 OPT_VERSION=""
 OPT_REINSTALL=0
@@ -66,6 +67,17 @@ resolve_base_url() {
     printf 'https://github.com/%s/%s/releases/latest/download/' \
       "$REPO_OWNER" "$REPO_NAME"
   fi
+}
+
+# Returns 0 (success) when /Applications/EventSubtitles.app exists and its
+# CFBundleShortVersionString equals the version argument. Returns 1 otherwise.
+is_already_installed() {
+  local want="$1"
+  local plist="$APPS_DIR/EventSubtitles.app/Contents/Info.plist"
+  [[ -f "$plist" ]] || return 1
+  local have
+  have="$(plutil -extract CFBundleShortVersionString raw -o - "$plist" 2>/dev/null || true)"
+  [[ -n "$have" && "$have" == "$want" ]]
 }
 
 main() {
