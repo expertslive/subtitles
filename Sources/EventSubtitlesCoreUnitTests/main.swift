@@ -256,6 +256,114 @@ private func testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric() -> B
     return expectEqual(numeric < nonNumeric, true, "numeric prerelease identifier sorts before non-numeric")
 }
 
+private struct FakeVersionTextFetcher: VersionTextFetching {
+    var result: Result<String, UpdateCheckFailureReason>
+
+    func fetchVersionText(from url: URL, timeout: TimeInterval) async -> Result<String, UpdateCheckFailureReason> {
+        result
+    }
+}
+
+private func testUpdateCheckerReportsUpToDateForEqualVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0\n")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .upToDate(currentVersion: "3.4.0"), "equal version is up to date")
+}
+
+private func testUpdateCheckerReportsAvailableForNewerVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.5.0")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .available(currentVersion: "3.4.0", latestVersion: "3.5.0"),
+        "newer latest version is available"
+    )
+}
+
+private func testUpdateCheckerReportsUpToDateForOlderLatestVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.3.0")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .upToDate(currentVersion: "3.4.0"), "older latest version is not an update")
+}
+
+private func testUpdateCheckerReportsAvailableFromPrereleaseToStable() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0-rc1",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .available(currentVersion: "3.4.0-rc1", latestVersion: "3.4.0"),
+        "stable release updates matching prerelease"
+    )
+}
+
+private func testUpdateCheckerManualFailureSurfacesReason() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.networkUnavailable)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .networkUnavailable),
+        "manual network failure surfaces"
+    )
+}
+
+private func testUpdateCheckerLaunchFailureReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.networkUnavailable)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch network failure returns idle")
+}
+
+private func testUpdateCheckerRejectsMalformedRemoteVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("not-a-version")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .invalidRemoteVersion),
+        "malformed remote version fails"
+    )
+}
+
+private func testUpdateCheckerRejectsMalformedLocalVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0")))
+    let status = await checker.check(
+        currentVersionText: "local-dev",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "local-dev", reason: .invalidLocalVersion),
+        "malformed local version fails"
+    )
+}
+
 private func readSource(_ relativePath: String) -> String? {
     let sourceURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         .appendingPathComponent(relativePath)
@@ -697,6 +805,25 @@ let tests = [
 var failed = 0
 for (name, test) in tests {
     if test() {
+        print("PASS: \(name)")
+    } else {
+        failed += 1
+    }
+}
+
+let asyncTests: [(String, () async -> Bool)] = [
+    ("updateCheckerReportsUpToDateForEqualVersion", testUpdateCheckerReportsUpToDateForEqualVersion),
+    ("updateCheckerReportsAvailableForNewerVersion", testUpdateCheckerReportsAvailableForNewerVersion),
+    ("updateCheckerReportsUpToDateForOlderLatestVersion", testUpdateCheckerReportsUpToDateForOlderLatestVersion),
+    ("updateCheckerReportsAvailableFromPrereleaseToStable", testUpdateCheckerReportsAvailableFromPrereleaseToStable),
+    ("updateCheckerManualFailureSurfacesReason", testUpdateCheckerManualFailureSurfacesReason),
+    ("updateCheckerLaunchFailureReturnsIdle", testUpdateCheckerLaunchFailureReturnsIdle),
+    ("updateCheckerRejectsMalformedRemoteVersion", testUpdateCheckerRejectsMalformedRemoteVersion),
+    ("updateCheckerRejectsMalformedLocalVersion", testUpdateCheckerRejectsMalformedLocalVersion)
+]
+
+for (name, test) in asyncTests {
+    if await test() {
         print("PASS: \(name)")
     } else {
         failed += 1
