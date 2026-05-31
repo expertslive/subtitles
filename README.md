@@ -75,6 +75,17 @@ Each session folder contains:
 
 `source-transcript.txt` is the spoken-word transcript. `display-transcript.txt` is what was shown on screen after glossary correction and optional translation. `source.srt` and `display.srt` are regenerated after every final segment with approximate timings. `draft.srt` mirrors the display SRT for quick review.
 
+## Installation
+
+To install `EventSubtitles` and its Stream Deck plugin on an event Mac:
+
+```bash
+curl -fsSL https://github.com/expertslive/subtitles/releases/latest/download/install.sh | bash
+```
+
+See [`docs/install.md`](docs/install.md) for prerequisites, flags, and the
+post-install steps.
+
 ## Model Plan
 
 The intended production path is:
