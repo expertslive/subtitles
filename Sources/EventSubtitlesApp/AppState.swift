@@ -151,6 +151,7 @@ final class AppState {
     @ObservationIgnored private let settingsStore = AppSettingsStore()
     @ObservationIgnored private var pendingSaveTask: Task<Void, Never>?
     @ObservationIgnored private var updateCheckTask: Task<Void, Never>?
+    @ObservationIgnored private var hasAttemptedLaunchUpdateCheck = false
     @ObservationIgnored private let sleepPreventer = SleepPreventer()
     @ObservationIgnored private var captionStabilityEngine = CaptionStabilityEngine()
     @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
@@ -457,9 +458,10 @@ final class AppState {
     }
 
     func checkForUpdatesOnLaunch() {
-        guard updateStatus == .idle, updateCheckTask == nil else {
+        guard !hasAttemptedLaunchUpdateCheck, updateStatus == .idle, updateCheckTask == nil else {
             return
         }
+        hasAttemptedLaunchUpdateCheck = true
         runUpdateCheck(mode: .launch)
     }
 
@@ -477,15 +479,25 @@ final class AppState {
     }
 
     var currentAppVersionText: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.3.0"
+        bundleInfoString(for: "CFBundleShortVersionString") ?? "unknown-local"
     }
 
     var currentAppBuildText: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "8"
+        bundleInfoString(for: "CFBundleVersion") ?? "local"
+    }
+
+    private func bundleInfoString(for key: String) -> String? {
+        guard let value = Bundle.main.infoDictionary?[key] as? String else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func runUpdateCheck(mode: UpdateCheckMode) {
-        updateCheckTask?.cancel()
+        guard updateStatus != .checking, updateCheckTask == nil else {
+            return
+        }
         updateStatus = .checking
         let currentVersion = currentAppVersionText
         let checker = updateChecker

@@ -457,6 +457,66 @@ private func readSource(_ relativePath: String) -> String? {
     return try? String(contentsOf: sourceURL, encoding: .utf8)
 }
 
+private func testAppStateUpdateChecksDoNotRestartInFlightChecks() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let runStart = source.range(of: "private func runUpdateCheck(mode: UpdateCheckMode)"),
+          let selectOutput = source.range(of: "func selectOutputDisplay", range: runStart.upperBound..<source.endIndex)
+    else {
+        fputs("FAIL: AppState update-check lifecycle markers should exist\n", stderr)
+        return false
+    }
+
+    let runUpdateCheck = source[runStart.lowerBound..<selectOutput.lowerBound]
+    return expectEqual(
+        runUpdateCheck.contains("guard updateStatus != .checking, updateCheckTask == nil else") &&
+            runUpdateCheck.contains("return") &&
+            !runUpdateCheck.contains("updateCheckTask?.cancel()"),
+        true,
+        "manual update checks should no-op instead of canceling and restarting an in-flight check"
+    )
+}
+
+private func testAppStateLaunchUpdateCheckAttemptsOncePerProcess() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let launchStart = source.range(of: "func checkForUpdatesOnLaunch()"),
+          let manualStart = source.range(of: "func checkForUpdatesManually()", range: launchStart.upperBound..<source.endIndex)
+    else {
+        fputs("FAIL: AppState launch update-check markers should exist\n", stderr)
+        return false
+    }
+
+    let launchCheck = source[launchStart.lowerBound..<manualStart.lowerBound]
+    return expectEqual(
+        source.contains("@ObservationIgnored private var hasAttemptedLaunchUpdateCheck = false") &&
+            launchCheck.contains("guard !hasAttemptedLaunchUpdateCheck, updateStatus == .idle, updateCheckTask == nil else") &&
+            launchCheck.contains("hasAttemptedLaunchUpdateCheck = true") &&
+            launchCheck.contains("runUpdateCheck(mode: .launch)"),
+        true,
+        "launch update checks should be attempted at most once per app process"
+    )
+}
+
+private func testAppStateUpdateVersionFallbacksAreNeutral() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let versionStart = source.range(of: "var currentAppVersionText: String"),
+          let runStart = source.range(of: "private func runUpdateCheck", range: versionStart.upperBound..<source.endIndex)
+    else {
+        fputs("FAIL: AppState version fallback markers should exist\n", stderr)
+        return false
+    }
+
+    let versionAccessors = source[versionStart.lowerBound..<runStart.lowerBound]
+    return expectEqual(
+        versionAccessors.contains(#"bundleInfoString(for: "CFBundleShortVersionString") ?? "unknown-local""#) &&
+            versionAccessors.contains(#"bundleInfoString(for: "CFBundleVersion") ?? "local""#) &&
+            versionAccessors.contains("trimmingCharacters(in: .whitespacesAndNewlines)") &&
+            !source.contains(#"?? "3.3.0""#) &&
+            !source.contains(#"?? "8""#),
+        true,
+        "AppState should use bundle version values first and neutral local fallbacks instead of stale release constants"
+    )
+}
+
 private func testAppStateStartOnlyRunsSessionAfterCaptureSucceeds() -> Bool {
     guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
         fputs("FAIL: AppState source should be readable\n", stderr)
@@ -875,6 +935,9 @@ let tests = [
     ("semanticVersionComparesNumericPrereleaseBeforeNonNumeric", testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric),
     ("urlSessionVersionTextFetcherPreservesCancellation", testURLSessionVersionTextFetcherPreservesCancellation),
     ("urlSessionVersionTextFetcherMapsNetworkErrors", testURLSessionVersionTextFetcherMapsNetworkErrors),
+    ("appStateUpdateChecksDoNotRestartInFlightChecks", testAppStateUpdateChecksDoNotRestartInFlightChecks),
+    ("appStateLaunchUpdateCheckAttemptsOncePerProcess", testAppStateLaunchUpdateCheckAttemptsOncePerProcess),
+    ("appStateUpdateVersionFallbacksAreNeutral", testAppStateUpdateVersionFallbacksAreNeutral),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
     ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
     ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
