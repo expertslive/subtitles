@@ -47,19 +47,17 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func fillExternalDisplay() {
+    func fillExternalDisplay() -> Bool {
+        guard let target = preferredOutputScreen() else {
+            return false
+        }
+
         if window == nil {
             createWindow()
         }
 
         guard let window else {
-            return
-        }
-
-        let target = preferredOutputScreen() ?? NSScreen.main
-        guard let target else {
-            restoreWindow()
-            return
+            return false
         }
 
         window.styleMask = [.borderless]
@@ -89,6 +87,7 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         state.outputWindowDidUpdate(isVisible: true, isFilled: true, displayID: AppState.screenID(for: target))
         NSApp.activate(ignoringOtherApps: true)
+        return true
     }
 
     func restoreWindow() {
@@ -150,7 +149,8 @@ final class OutputWindowController: NSObject, NSWindowDelegate {
 
     private func preferredOutputScreen() -> NSScreen? {
         if let selectedOutputDisplayID = state.selectedOutputDisplayID,
-           let selected = NSScreen.screens.first(where: { AppState.screenID(for: $0) == selectedOutputDisplayID }) {
+           let selected = NSScreen.screens.first(where: { AppState.screenID(for: $0) == selectedOutputDisplayID }),
+           selected != NSScreen.main {
             return selected
         }
         return NSScreen.screens.first { $0 != NSScreen.main }

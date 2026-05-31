@@ -12,3 +12,7 @@ docs/calm-caption-display-spec.md
 docs/codex-ui-redesign-prompt.md
 docs/superpowers/
 .superpowers/
+.worktrees/
+StreamDeck/**/node_modules/
+StreamDeck/**/bin/
+build/*.streamDeckPlugin

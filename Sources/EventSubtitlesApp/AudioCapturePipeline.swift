@@ -36,8 +36,12 @@ final class AudioCapturePipeline: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let writeQueue = DispatchQueue(label: "audio.capture.write", qos: .utility)
     private let stateLock = NSLock()
+    private let controlLock = NSLock()
+    private var controlGeneration: UInt64 = 0
     private var recordingFile: AVAudioFile?
     private var running = false
+    private var activeDeliveryGeneration: UInt64?
+    private var captureResourcesInstalled = false
     private var converter: AVAudioConverter?
 
     private let whisperFormat: AVAudioFormat = {
@@ -74,93 +78,139 @@ final class AudioCapturePipeline: @unchecked Sendable {
         onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
     ) async throws {
-        guard await requestAudioAccess() else {
-            throw AudioCapturePipelineError.microphoneDenied
-        }
-
+        let operationGeneration = beginControlOperation()
         try await start(
+            operationGeneration: operationGeneration,
             inputDeviceID: inputDeviceID,
             recordingURL: recordingURL,
-            preserveExistingRecording: false,
             onLevel: onLevel,
             onSamples: onSamples,
             onConfigurationChange: onConfigurationChange
         )
     }
 
-    private func start(
+    func start(
+        operationGeneration: UInt64,
+        inputDeviceID: AudioDeviceID?,
+        recordingURL: URL?,
+        onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
+        onSamples: @escaping @Sendable ([Float]) -> Void,
+        onConfigurationChange: @escaping @Sendable () -> Void
+    ) async throws {
+        let hasAudioAccess = await requestAudioAccess()
+
+        try controlLock.withLock {
+            guard controlGeneration == operationGeneration else { throw CancellationError() }
+            guard hasAudioAccess else {
+                throw AudioCapturePipelineError.microphoneDenied
+            }
+
+            try startLocked(
+                operationGeneration: operationGeneration,
+                inputDeviceID: inputDeviceID,
+                recordingURL: recordingURL,
+                preserveExistingRecording: false,
+                onLevel: onLevel,
+                onSamples: onSamples,
+                onConfigurationChange: onConfigurationChange
+            )
+        }
+    }
+
+    private func startLocked(
+        operationGeneration: UInt64,
         inputDeviceID: AudioDeviceID?,
         recordingURL: URL?,
         preserveExistingRecording: Bool,
         onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
         onSamples: @escaping @Sendable ([Float]) -> Void,
         onConfigurationChange: @escaping @Sendable () -> Void
-    ) async throws {
+    ) throws {
         let wasRunning = stateLock.withLock { running }
         if wasRunning {
-            stop(keepRecordingFile: preserveExistingRecording)
+            stopLocked(keepRecordingFile: preserveExistingRecording)
         }
 
-        levelHandler = onLevel
-        samplesHandler = onSamples
-        onConfigurationDidChange = onConfigurationChange
+        do {
+            levelHandler = onLevel
+            samplesHandler = onSamples
+            onConfigurationDidChange = onConfigurationChange
 
-        if let inputDeviceID {
-            try setInputDevice(inputDeviceID)
+            if let inputDeviceID {
+                try setInputDevice(inputDeviceID)
+            }
+
+            let inputNode = engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+            guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
+                throw AudioCapturePipelineError.inputUnavailable
+            }
+
+            guard let converter = AVAudioConverter(from: inputFormat, to: whisperFormat) else {
+                throw AudioCapturePipelineError.recordingUnavailable(
+                    "Cannot convert from \(inputFormat) to 16 kHz mono Float32."
+                )
+            }
+            self.converter = converter
+
+            if let recordingURL {
+                recordingFile = try openRecordingFile(at: recordingURL)
+            } else if !preserveExistingRecording {
+                recordingFile = nil
+            }
+            let installedRecordingFile = recordingFile
+
+            let bufferSize: AVAudioFrameCount = 1024
+            inputNode.removeTap(onBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
+                self?.handleBuffer(
+                    buffer,
+                    operationGeneration: operationGeneration,
+                    converter: converter,
+                    recordingFile: installedRecordingFile,
+                    onLevel: onLevel,
+                    onSamples: onSamples
+                )
+            }
+
+            installConfigChangeObserver(onConfigurationChange)
+            installDefaultInputDeviceListener(onConfigurationChange)
+            captureResourcesInstalled = true
+
+            engine.prepare()
+            try engine.start()
+
+            stateLock.withLock {
+                running = true
+                activeDeliveryGeneration = operationGeneration
+            }
+        } catch {
+            cleanupCaptureResourcesLocked(keepRecordingFile: preserveExistingRecording)
+            throw error
         }
-
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
-            throw AudioCapturePipelineError.inputUnavailable
-        }
-
-        guard let converter = AVAudioConverter(from: inputFormat, to: whisperFormat) else {
-            throw AudioCapturePipelineError.recordingUnavailable(
-                "Cannot convert from \(inputFormat) to 16 kHz mono Float32."
-            )
-        }
-        self.converter = converter
-
-        if let recordingURL {
-            recordingFile = try openRecordingFile(at: recordingURL)
-        } else if !preserveExistingRecording {
-            recordingFile = nil
-        }
-
-        let bufferSize: AVAudioFrameCount = 1024
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
-            self?.handleBuffer(buffer)
-        }
-
-        installConfigChangeObserver()
-        installDefaultInputDeviceListener()
-
-        engine.prepare()
-        try engine.start()
-
-        stateLock.withLock { running = true }
     }
 
     func stop() {
-        stop(keepRecordingFile: false)
+        controlLock.withLock {
+            controlGeneration &+= 1
+            stopLocked(keepRecordingFile: false)
+        }
     }
 
-    private func stop(keepRecordingFile: Bool) {
-        stateLock.lock()
-        guard running else {
-            stateLock.unlock()
-            if !keepRecordingFile {
-                recordingFile = nil
-            }
-            return
-        }
-        running = false
-        stateLock.unlock()
+    private func stopLocked(keepRecordingFile: Bool) {
+        cleanupCaptureResourcesLocked(keepRecordingFile: keepRecordingFile)
+    }
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+    private func cleanupCaptureResourcesLocked(keepRecordingFile: Bool) {
+        stateLock.withLock {
+            running = false
+            activeDeliveryGeneration = nil
+        }
+
+        if captureResourcesInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         converter = nil
 
         let drained = recordingFile
@@ -180,35 +230,74 @@ final class AudioCapturePipeline: @unchecked Sendable {
             removeDefaultInputDeviceListener()
         }
 
+        levelHandler = nil
         samplesHandler = nil
+        onConfigurationDidChange = nil
+        captureResourcesInstalled = false
     }
 
     func restart(
         inputDeviceID: AudioDeviceID?,
         recordingURL: URL?
     ) async throws {
-        let level = self.levelHandler
-        let samples = self.samplesHandler
-        let onChange = self.onConfigurationDidChange
-        let shouldPreserveRecording = recordingURL == nil && recordingFile != nil
-        stop(keepRecordingFile: shouldPreserveRecording)
-        guard let level, let samples, let onChange else {
-            throw AudioCapturePipelineError.inputUnavailable
-        }
-        try await start(
+        let operationGeneration = beginControlOperation()
+        try await restart(
+            operationGeneration: operationGeneration,
             inputDeviceID: inputDeviceID,
-            recordingURL: recordingURL,
-            preserveExistingRecording: shouldPreserveRecording,
-            onLevel: level,
-            onSamples: samples,
-            onConfigurationChange: onChange
+            recordingURL: recordingURL
         )
+    }
+
+    func restart(
+        operationGeneration: UInt64,
+        inputDeviceID: AudioDeviceID?,
+        recordingURL: URL?
+    ) async throws {
+        try controlLock.withLock {
+            guard controlGeneration == operationGeneration else { throw CancellationError() }
+
+            let level = self.levelHandler
+            let samples = self.samplesHandler
+            let onChange = self.onConfigurationDidChange
+            let shouldPreserveRecording = recordingURL == nil && recordingFile != nil
+            stopLocked(keepRecordingFile: shouldPreserveRecording)
+            guard let level, let samples, let onChange else {
+                throw AudioCapturePipelineError.inputUnavailable
+            }
+            try startLocked(
+                operationGeneration: operationGeneration,
+                inputDeviceID: inputDeviceID,
+                recordingURL: recordingURL,
+                preserveExistingRecording: shouldPreserveRecording,
+                onLevel: level,
+                onSamples: samples,
+                onConfigurationChange: onChange
+            )
+        }
     }
 
     // MARK: - Private
 
-    private func handleBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let converter else { return }
+    func reserveControlOperation() -> UInt64 {
+        beginControlOperation()
+    }
+
+    private func beginControlOperation() -> UInt64 {
+        controlLock.withLock {
+            controlGeneration &+= 1
+            return controlGeneration
+        }
+    }
+
+    private func handleBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        operationGeneration: UInt64,
+        converter: AVAudioConverter,
+        recordingFile: AVAudioFile?,
+        onLevel: @escaping @Sendable (AudioLevelSample) -> Void,
+        onSamples: @escaping @Sendable ([Float]) -> Void
+    ) {
+        guard canDeliverCallbacks(for: operationGeneration) else { return }
 
         let inSampleRate = buffer.format.sampleRate
         let outSampleRate = whisperFormat.sampleRate
@@ -218,7 +307,8 @@ final class AudioCapturePipeline: @unchecked Sendable {
         guard outFrameCapacity > 0,
               let outBuffer = AVAudioPCMBuffer(pcmFormat: whisperFormat, frameCapacity: outFrameCapacity)
         else {
-            levelHandler?(AudioLevelSample(rms: 0, peak: 0))
+            guard canDeliverCallbacks(for: operationGeneration) else { return }
+            onLevel(AudioLevelSample(rms: 0, peak: 0))
             return
         }
 
@@ -230,13 +320,15 @@ final class AudioCapturePipeline: @unchecked Sendable {
 
         guard status != .error,
               let channel = outBuffer.floatChannelData?[0] else {
-            levelHandler?(AudioLevelSample(rms: 0, peak: 0))
+            guard canDeliverCallbacks(for: operationGeneration) else { return }
+            onLevel(AudioLevelSample(rms: 0, peak: 0))
             return
         }
 
         let frameCount = Int(outBuffer.frameLength)
         guard frameCount > 0 else {
-            levelHandler?(AudioLevelSample(rms: 0, peak: 0))
+            guard canDeliverCallbacks(for: operationGeneration) else { return }
+            onLevel(AudioLevelSample(rms: 0, peak: 0))
             return
         }
 
@@ -250,11 +342,12 @@ final class AudioCapturePipeline: @unchecked Sendable {
         let dbPeak = 20 * log10(max(peak, 0.000_001))
         let normalizedRMS = min(1, max(0, (dbRMS + 60) / 60))
         let normalizedPeak = min(1, max(0, (dbPeak + 60) / 60))
-        levelHandler?(AudioLevelSample(rms: normalizedRMS, peak: normalizedPeak))
+        guard canDeliverCallbacks(for: operationGeneration) else { return }
+        onLevel(AudioLevelSample(rms: normalizedRMS, peak: normalizedPeak))
 
         // Hand a Float copy to the Whisper consumer via direct callback.
         let samples = Array(UnsafeBufferPointer(start: channel, count: frameCount))
-        samplesHandler?(samples)
+        onSamples(samples)
 
         // Hand the converted PCM buffer to the write queue (off the audio thread).
         if let file = recordingFile {
@@ -262,6 +355,12 @@ final class AudioCapturePipeline: @unchecked Sendable {
             writeQueue.async {
                 try? file.write(from: bufferCopy)
             }
+        }
+    }
+
+    private func canDeliverCallbacks(for operationGeneration: UInt64) -> Bool {
+        stateLock.withLock {
+            running && activeDeliveryGeneration == operationGeneration
         }
     }
 
@@ -298,13 +397,13 @@ final class AudioCapturePipeline: @unchecked Sendable {
         }
     }
 
-    private func installConfigChangeObserver() {
+    private func installConfigChangeObserver(_ onConfigurationChange: @escaping @Sendable () -> Void) {
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
             queue: nil
-        ) { [weak self] _ in
-            self?.onConfigurationDidChange?()
+        ) { _ in
+            onConfigurationChange()
         }
     }
 
@@ -314,10 +413,10 @@ final class AudioCapturePipeline: @unchecked Sendable {
         mElement: kAudioObjectPropertyElementMain
     )
 
-    private func installDefaultInputDeviceListener() {
+    private func installDefaultInputDeviceListener(_ onConfigurationChange: @escaping @Sendable () -> Void) {
         guard !defaultDeviceListenerInstalled else { return }
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.onConfigurationDidChange?()
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            onConfigurationChange()
         }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),

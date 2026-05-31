@@ -2,6 +2,7 @@ import AppKit
 import CoreAudio
 import Darwin
 import EventSubtitlesCore
+import EventSubtitlesRemoteControl
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -34,17 +35,20 @@ final class AppState {
     }
     var sourceLanguage: SourceLanguage = .automatic
 
-    var isRunning = false
-    var isStarting = false
-    var audioLevel = 0.0
+    var isRunning = false { didSet { publishStreamDeckStatus() } }
+    var isStarting = false { didSet { publishStreamDeckStatus() } }
+    var audioLevel = 0.0 { didSet { publishStreamDeckStatus() } }
     var audioInputDevices: [AudioInputDeviceInfo] = []
     var selectedAudioInputDeviceID: String?
     var effectiveAudioInputDeviceID: String?
     var audioInputDescription = "Input unknown"
     var audioInputSelectionStatus = "Input unknown"
     var lastAudibleInputAt: Date?
+    var isSelectedAudioInputAvailable = false { didSet { publishStreamDeckStatus() } }
+    var hasAudioCaptureFailure = false { didSet { publishStreamDeckStatus() } }
+    var didFailToStartSession = false { didSet { publishStreamDeckStatus() } }
     var engineStatus = "Simulator idle"
-    var errorMessage: String?
+    var errorMessage: String? { didSet { publishStreamDeckStatus() } }
     var sessionName = "Main stage"
     var selectedWorkspace: OperatorWorkspace = .live
     var transcriptionEngine: TranscriptionEngineChoice = .simulator
@@ -61,6 +65,7 @@ final class AppState {
             if !publicCaptionText.isEmpty && publicCaptionText != oldValue {
                 lastCaptionActivityAt = Date()
             }
+            publishStreamDeckStatus()
         }
     }
     var captionLayout = CaptionLayout(lines: []) {
@@ -118,17 +123,17 @@ final class AppState {
     """
 
     var manualCaption = ""
-    var outputBlanked = false
+    var outputBlanked = false { didSet { publishStreamDeckStatus() } }
     var sessionLogStatus = "No active session"
     var sessionDirectoryPath: String?
-    var sessionSegmentCount = 0
-    var sessionElapsedText = "00:00:00"
+    var sessionSegmentCount = 0 { didSet { publishStreamDeckStatus() } }
+    var sessionElapsedText = "00:00:00" { didSet { publishStreamDeckStatus() } }
     var keepMacAwakeDuringSession = true
     var sleepPreventionStatus = "Awake ready"
     var appMemoryUsageText = "Unknown"
     var selectedOutputDisplayID: String?
-    var outputWindowVisible = false
-    var outputWindowFilled = false
+    var outputWindowVisible = false { didSet { publishStreamDeckStatus() } }
+    var outputWindowFilled = false { didSet { publishStreamDeckStatus() } }
     var outputWindowDisplayID: String?
     var isTestingAudio = false
     var audioTestResult: AudioTestRecordingResult?
@@ -148,9 +153,13 @@ final class AppState {
     @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
     @ObservationIgnored private var linePacedRoller = LinePacedRoller(targetCharactersPerLine: 42, maxLines: 2)
     @ObservationIgnored private var outputController: OutputWindowController?
-    @ObservationIgnored private var sessionStartedAt: Date?
+    @ObservationIgnored private var streamDeckControlServer: StreamDeckControlServer?
+    @ObservationIgnored private var streamDeckControlServerStartTask: Task<Void, Never>?
+    @ObservationIgnored private var activeCaptureStartAttempt: UUID?
+    @ObservationIgnored private var runningCaptureSessionID: UUID?
+    @ObservationIgnored var sessionStartedAt: Date? { didSet { publishStreamDeckStatus() } }
     @ObservationIgnored private var lastCaptionSnapshotAt: Date?
-    @ObservationIgnored private var lastCaptionActivityAt: Date?
+    @ObservationIgnored var lastCaptionActivityAt: Date? { didSet { publishStreamDeckStatus() } }
     /// Pixel width of the live output window's render area. Set by SubtitleOutputView
     /// when it has `governsLayout: true`. Drives the `effectiveTargetCharactersPerLine`
     /// calculation so each logical line fits on one visual row at the chosen font.
@@ -167,6 +176,84 @@ final class AppState {
         refreshAudioInputDevice()
         refreshResourceUsage()
         updateSleepPreventionStatusForIdle()
+        startStreamDeckControlServer()
+    }
+
+    private func startStreamDeckControlServer() {
+        let server = StreamDeckControlServer(
+            commandHandler: { [weak self] request in
+                guard let self else {
+                    return StreamDeckCommandResult(id: request.id, accepted: false, reason: .internalError)
+                }
+                return await self.handleStreamDeckCommand(request)
+            },
+            statusProvider: { [weak self] in
+                guard let self else {
+                    return StreamDeckStatusSnapshot(
+                        sessionState: .error,
+                        elapsedText: "00:00:00",
+                        displayState: .hidden,
+                        outputState: .live,
+                        captionState: .clear,
+                        audioState: .unknown,
+                        errorSummary: "App unavailable",
+                        displayedSegmentCount: 0
+                    )
+                }
+                return await self.streamDeckStatusSnapshot()
+            },
+            diagnostics: { [weak self] message in
+                Task { @MainActor [weak self] in
+                    self?.sessionLogger.info("Stream Deck control: \(message)")
+                }
+            }
+        )
+        streamDeckControlServer = server
+        let startTask = Task { @MainActor [weak self, server] in
+            guard !Task.isCancelled else {
+                return
+            }
+            do {
+                try await server.start()
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.publishStreamDeckStatus()
+            } catch {
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.sessionLogger.error("Stream Deck control server failed: \(error.localizedDescription)")
+            }
+        }
+        streamDeckControlServerStartTask = startTask
+    }
+
+    func publishStreamDeckStatus() {
+        guard let streamDeckControlServer else {
+            return
+        }
+        Task {
+            await streamDeckControlServer.publishStatus()
+        }
+    }
+
+    func stopStreamDeckControlServer() async {
+        guard let streamDeckControlServer else {
+            return
+        }
+        let startTask = streamDeckControlServerStartTask
+        streamDeckControlServerStartTask = nil
+        self.streamDeckControlServer = nil
+        if let startTask {
+            startTask.cancel()
+            await startTask.value
+        }
+        do {
+            try await streamDeckControlServer.stop()
+        } catch {
+            sessionLogger.error("Stream Deck control server stop failed: \(error.localizedDescription)")
+        }
     }
 
     func start() {
@@ -174,6 +261,11 @@ final class AppState {
             return
         }
 
+        let startAttemptID = UUID()
+        activeCaptureStartAttempt = startAttemptID
+        let captureOperationGeneration = capturePipeline.reserveControlOperation()
+        didFailToStartSession = false
+        hasAudioCaptureFailure = false
         isStarting = true
         errorMessage = nil
         saveSettings()
@@ -184,32 +276,47 @@ final class AppState {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            guard self.activeCaptureStartAttempt == startAttemptID, self.isStarting else { return }
             do {
                 try await self.capturePipeline.start(
+                    operationGeneration: captureOperationGeneration,
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                     recordingURL: self.sessionRecorder.audioRecordingURL,
                     onLevel: { [weak self] sample in
                         Task { @MainActor [weak self] in
-                            self?.publishAudioLevel(Double(max(sample.rms, sample.peak)))
+                            self?.publishAudioLevel(Double(max(sample.rms, sample.peak)), for: startAttemptID)
                         }
                     },
                     onSamples: { [weak self] samples in
-                        // Audio thread → Whisper. ingest is non-blocking and thread-safe
-                        // (StreamFedAudioProcessor uses an NSLock on its sample buffer).
-                        self?.whisperKitTranscriber.ingest(samples)
+                        Task { @MainActor [weak self] in
+                            guard let self,
+                                  self.isRunning,
+                                  self.runningCaptureSessionID == startAttemptID else { return }
+                            self.whisperKitTranscriber.ingest(samples)
+                        }
                     },
                     onConfigurationChange: { [weak self] in
                         Task { @MainActor [weak self] in
-                            self?.handleAudioConfigurationChange()
+                            self?.handleAudioConfigurationChange(for: startAttemptID)
                         }
                     }
                 )
+                guard self.activeCaptureStartAttempt == startAttemptID else {
+                    if self.activeCaptureStartAttempt == nil && !self.isRunning {
+                        self.capturePipeline.stop()
+                    }
+                    return
+                }
                 guard self.isStarting else {
+                    self.activeCaptureStartAttempt = nil
                     self.capturePipeline.stop()
                     return
                 }
+                self.activeCaptureStartAttempt = nil
                 self.isRunning = true
                 self.isStarting = false
+                self.runningCaptureSessionID = startAttemptID
+                self.hasAudioCaptureFailure = false
                 self.engineStatus = self.transcriptionEngine.statusLabel
                 self.startSleepPreventionIfNeeded()
                 self.startSessionTimer()
@@ -217,6 +324,9 @@ final class AppState {
                 self.refreshResourceUsage()
                 self.startTranscriptionEngine()
             } catch {
+                guard self.activeCaptureStartAttempt == startAttemptID else { return }
+                guard self.isStarting else { return }
+                self.activeCaptureStartAttempt = nil
                 self.sessionLogger.error("Audio capture start failed: \(error.localizedDescription)")
                 self.handleCaptureStartFailure(error)
             }
@@ -226,9 +336,11 @@ final class AppState {
     func stop() async {
         guard isRunning || isStarting else { return }
 
+        activeCaptureStartAttempt = nil
+        runningCaptureSessionID = nil
         simulatorTranscriber.stopNow()
-        await whisperKitTranscriber.stop()
         capturePipeline.stop()
+        await whisperKitTranscriber.stop()
         audioLevel = 0
         isRunning = false
         isStarting = false
@@ -251,6 +363,9 @@ final class AppState {
         audioLevel = 0
         isRunning = false
         isStarting = false
+        runningCaptureSessionID = nil
+        didFailToStartSession = true
+        hasAudioCaptureFailure = true
         engineStatus = transcriptionEngine.idleStatusLabel
         stopCaptionDisplayTimer()
         stopSleepPrevention()
@@ -295,11 +410,12 @@ final class AppState {
         outputController?.show()
     }
 
-    func fillExternalDisplay() {
+    @discardableResult
+    func fillExternalDisplay() -> Bool {
         if outputController == nil {
             outputController = OutputWindowController(state: self)
         }
-        outputController?.fillExternalDisplay()
+        return outputController?.fillExternalDisplay() ?? false
     }
 
     func restoreOutputWindow() {
@@ -611,6 +727,12 @@ final class AppState {
 
         audioInputDevices = devices
         effectiveAudioInputDeviceID = result.effectiveDeviceID
+        isSelectedAudioInputAvailable = result.effectiveDeviceID.map { effectiveID in
+            devices.contains(where: { $0.id == effectiveID })
+        } ?? false
+        if result.status == .overrideUnavailable {
+            isSelectedAudioInputAvailable = false
+        }
 
         if let effectiveDevice = devices.first(where: { $0.id == result.effectiveDeviceID }) {
             audioInputDescription = effectiveDevice.displayName
@@ -632,27 +754,36 @@ final class AppState {
     }
 
     @MainActor
-    private func handleAudioConfigurationChange() {
+    private func handleAudioConfigurationChange(for runningSessionID: UUID) {
+        guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }
         refreshAudioInputDevice()
         sessionLogger.warn("Audio configuration change; restarting capture")
-        guard isRunning else { return }
 
         let priorDescription = audioInputDescription
         engineStatus = "Capture restarting"
+        let restartOperationGeneration = capturePipeline.reserveControlOperation()
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            guard self.isRunning, self.runningCaptureSessionID == runningSessionID else { return }
             do {
                 try await self.capturePipeline.restart(
+                    operationGeneration: restartOperationGeneration,
                     inputDeviceID: self.selectedAudioInputDeviceForCapture(),
                     recordingURL: nil // Keep the active CAF writer instead of rotating files mid-session.
                 )
+                guard self.isRunning, self.runningCaptureSessionID == runningSessionID else { return }
+                self.hasAudioCaptureFailure = false
                 self.engineStatus = "Capture restarted on \(self.audioInputDescription)"
                 if priorDescription != self.audioInputDescription {
                     self.errorMessage = "Audio device changed: \(self.audioInputDescription)"
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                guard self.isRunning, self.runningCaptureSessionID == runningSessionID else { return }
                 self.sessionLogger.error("Capture restart failed: \(error.localizedDescription)")
+                self.hasAudioCaptureFailure = true
                 self.engineStatus = "Capture restart failed"
                 self.errorMessage = "Audio capture restart failed: \(error.localizedDescription)"
             }
@@ -669,7 +800,8 @@ final class AppState {
         return AudioDeviceInspector.inputDevice(id: selectedAudioInputDeviceID)?.deviceID
     }
 
-    private func publishAudioLevel(_ level: Double) {
+    private func publishAudioLevel(_ level: Double, for runningSessionID: UUID) {
+        guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }
         let now = Date()
         guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 60.0 else { return }
         lastAudioLevelPublishedAt = now

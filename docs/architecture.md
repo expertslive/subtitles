@@ -107,6 +107,14 @@ The output menu and toolbar include a panic blank for live recovery. Panic blank
 
 Implementation details for future refinements are kept in the local untracked calm-caption display spec.
 
+## Stream Deck Control
+
+The app exposes a loopback-only Stream Deck control server while running. It binds to `127.0.0.1` on a dynamically chosen port and writes the current discovery record to `~/Library/Application Support/EventSubtitles/streamdeck-control.json`. The Stream Deck plugin reads that file, connects over WebSocket, sends a protocol hello, and renders keys from app-published status messages.
+
+The app remains authoritative for all state. The plugin sends explicit commands such as `startSession`, `stopSession`, `panicBlank`, and `unblankOutput`; it does not locally flip state after a key press. Panic blank and unblank are separate commands so a stale Stream Deck key cannot reverse the intended public-output safety action.
+
+The v1 protocol deliberately excludes caption text. The plugin status surface renders session, audio health, display/output state, caption activity, and displayed segment count only.
+
 ## Glossary Management
 
 The glossary remains stored as simple `input => output` text so session logs, import/export, and deterministic post-correction stay transparent. The operator UI now treats that text as structured rows:

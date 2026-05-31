@@ -186,6 +186,235 @@ private func testAppStateStartOnlyRunsSessionAfterCaptureSucceeds() -> Bool {
     )
 }
 
+private func testAppStateCanceledStartDoesNotRecordFailure() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let failureHandler = source.range(
+            of: "self.handleCaptureStartFailure(error)",
+            range: captureStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState capture-start failure markers should exist\n", stderr)
+        return false
+    }
+
+    let failurePath = source[captureStart.upperBound..<failureHandler.lowerBound]
+    return expectEqual(
+        failurePath.contains("guard self.isStarting else { return }"),
+        true,
+        "canceled capture startup should not be recorded as a session-start failure"
+    )
+}
+
+private func testAppStateScopesCaptureCompletionToStartupAttempt() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let startTask = source.range(of: "Task { @MainActor [weak self] in"),
+          let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let runningSet = source.range(
+            of: "self.isRunning = true",
+            range: captureStart.upperBound..<source.endIndex
+          ),
+          let catchStart = source.range(
+            of: "} catch {",
+            range: captureStart.upperBound..<source.endIndex
+          ),
+          let failureHandler = source.range(
+            of: "self.handleCaptureStartFailure(error)",
+            range: catchStart.upperBound..<source.endIndex
+          ),
+          let stopStart = source.range(of: "func stop() async"),
+          let stopCapture = source.range(
+            of: "capturePipeline.stop()",
+            range: stopStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState startup-attempt lifecycle markers should exist\n", stderr)
+        return false
+    }
+
+    let beforeCaptureStart = source[startTask.upperBound..<captureStart.lowerBound]
+    let successPath = source[captureStart.upperBound..<runningSet.lowerBound]
+    let failurePath = source[catchStart.upperBound..<failureHandler.lowerBound]
+    let stopPath = source[stopStart.upperBound..<stopCapture.lowerBound]
+    return expectEqual(
+        source.contains("@ObservationIgnored private var activeCaptureStartAttempt: UUID?") &&
+            source.contains("let startAttemptID = UUID()") &&
+            source.contains("activeCaptureStartAttempt = startAttemptID") &&
+            source.contains("let captureOperationGeneration = capturePipeline.reserveControlOperation()") &&
+            source.contains("operationGeneration: captureOperationGeneration") &&
+            beforeCaptureStart.contains("self.activeCaptureStartAttempt == startAttemptID") &&
+            successPath.contains("self.activeCaptureStartAttempt == startAttemptID") &&
+            failurePath.contains("self.activeCaptureStartAttempt == startAttemptID") &&
+            stopPath.contains("activeCaptureStartAttempt = nil"),
+        true,
+        "capture start completions should be accepted only for the active startup attempt"
+    )
+}
+
+private func testAudioCapturePipelineSerializesControlOperations() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AudioCapturePipeline.swift"),
+          let publicStart = source.range(of: "func start("),
+          let privateStart = source.range(of: "private func start"),
+          let stop = source.range(of: "func stop()"),
+          let restart = source.range(of: "func restart("),
+          restart.lowerBound > stop.lowerBound
+    else {
+        fputs("FAIL: audio capture control-operation markers should exist\n", stderr)
+        return false
+    }
+
+    let startPath = source[publicStart.lowerBound..<privateStart.lowerBound]
+    let stopPath = source[stop.lowerBound..<restart.lowerBound]
+    let restartPath = source[restart.lowerBound..<source.endIndex]
+    let cancellationGuards = source.components(
+        separatedBy: "guard controlGeneration == operationGeneration else { throw CancellationError() }"
+    ).count - 1
+    return expectEqual(
+        source.contains("private let controlLock = NSLock()") &&
+            source.contains("private var controlGeneration: UInt64 = 0") &&
+            source.contains("private func beginControlOperation() -> UInt64") &&
+            source.contains("func reserveControlOperation() -> UInt64") &&
+            source.contains("operationGeneration: UInt64,") &&
+            startPath.contains("let operationGeneration = beginControlOperation()") &&
+            startPath.contains("controlLock.withLock") &&
+            startPath.contains("controlGeneration == operationGeneration") &&
+            stopPath.contains("controlLock.withLock") &&
+            stopPath.contains("controlGeneration &+= 1") &&
+            restartPath.contains("let operationGeneration = beginControlOperation()") &&
+            restartPath.contains("controlLock.withLock") &&
+            restartPath.contains("controlGeneration == operationGeneration") &&
+            cancellationGuards >= 2,
+        true,
+        "audio capture control operations should serialize mutation and throw cancellation when superseded"
+    )
+}
+
+private func testAppStateScopesConfigurationRestartToRunningSession() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let stopStart = source.range(of: "func stop() async"),
+          let failureHandler = source.range(of: "private func handleCaptureStartFailure"),
+          let restartStart = source.range(of: "private func handleAudioConfigurationChange(for runningSessionID: UUID)"),
+          let selectedInput = source.range(
+            of: "private func selectedAudioInputDeviceForCapture()",
+            range: restartStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState running-session restart markers should exist\n", stderr)
+        return false
+    }
+
+    let stopPath = source[stopStart.lowerBound..<failureHandler.lowerBound]
+    let restartPath = source[restartStart.lowerBound..<selectedInput.lowerBound]
+    let sessionChecks = restartPath.components(separatedBy: "self.runningCaptureSessionID == runningSessionID").count - 1
+    let stopInvalidationPrecedesAwait = stopPath.range(of: "capturePipeline.stop()")!.lowerBound <
+        stopPath.range(of: "await whisperKitTranscriber.stop()")!.lowerBound
+    return expectEqual(
+        source.contains("@ObservationIgnored private var runningCaptureSessionID: UUID?") &&
+            source.contains("self.runningCaptureSessionID = startAttemptID") &&
+            stopPath.contains("runningCaptureSessionID = nil") &&
+            stopInvalidationPrecedesAwait &&
+            source.contains("self?.handleAudioConfigurationChange(for: startAttemptID)") &&
+            restartPath.contains("guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }") &&
+            restartPath.contains("let restartOperationGeneration = capturePipeline.reserveControlOperation()") &&
+            restartPath.contains("operationGeneration: restartOperationGeneration") &&
+            restartPath.contains("try await self.capturePipeline.restart(") &&
+            restartPath.contains("catch is CancellationError {") &&
+            sessionChecks >= 4,
+        true,
+        "configuration restarts should ignore supersession and publish only for their originating running session"
+    )
+}
+
+private func testAppStateScopesAudioCallbacksToRunningSession() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let captureStart = source.range(of: "try await self.capturePipeline.start"),
+          let captureComplete = source.range(
+            of: "self.isRunning = true",
+            range: captureStart.upperBound..<source.endIndex
+          ),
+          let publishStart = source.range(of: "private func publishAudioLevel("),
+          let systemMemoryStart = source.range(
+            of: "var systemMemoryText:",
+            range: publishStart.upperBound..<source.endIndex
+          )
+    else {
+        fputs("FAIL: AppState audio callback markers should exist\n", stderr)
+        return false
+    }
+
+    let callbacks = source[captureStart.lowerBound..<captureComplete.lowerBound]
+    let publish = source[publishStart.lowerBound..<systemMemoryStart.lowerBound]
+    return expectEqual(
+        callbacks.contains("self?.publishAudioLevel(Double(max(sample.rms, sample.peak)), for: startAttemptID)") &&
+            callbacks.contains("self.runningCaptureSessionID == startAttemptID") &&
+            callbacks.contains("self.whisperKitTranscriber.ingest(samples)") &&
+            publish.contains("for runningSessionID: UUID") &&
+            publish.contains("guard isRunning, self.runningCaptureSessionID == runningSessionID else { return }"),
+        true,
+        "audio level and sample delivery should be scoped to the current running capture session"
+    )
+}
+
+private func testAudioCapturePipelineBindsInstalledCallbacksToGeneration() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AudioCapturePipeline.swift") else {
+        fputs("FAIL: audio capture pipeline source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains("private var activeDeliveryGeneration: UInt64?") &&
+            source.contains("operationGeneration: UInt64,") &&
+            source.contains("self?.handleBuffer(") &&
+            source.contains("operationGeneration: operationGeneration") &&
+            source.contains("onLevel: onLevel") &&
+            source.contains("onSamples: onSamples") &&
+            source.contains("activeDeliveryGeneration == operationGeneration") &&
+            source.contains("private func installConfigChangeObserver(_ onConfigurationChange: @escaping @Sendable () -> Void)") &&
+            source.contains("private func installDefaultInputDeviceListener(_ onConfigurationChange: @escaping @Sendable () -> Void)") &&
+            source.contains("onConfigurationChange()") &&
+            !source.contains("self?.onConfigurationDidChange?()"),
+        true,
+        "tap and configuration delivery should use handlers captured for the installing generation"
+    )
+}
+
+private func testAudioCapturePipelineCleansUpPartialStartResources() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AudioCapturePipeline.swift"),
+          let startLocked = source.range(of: "private func startLocked"),
+          let stopLocked = source.range(of: "private func stopLocked"),
+          let restart = source.range(of: "func restart(", range: stopLocked.upperBound..<source.endIndex),
+          let cleanup = source.range(of: "private func cleanupCaptureResourcesLocked")
+    else {
+        fputs("FAIL: audio capture partial-start cleanup markers should exist\n", stderr)
+        return false
+    }
+
+    let startPath = source[startLocked.lowerBound..<stopLocked.lowerBound]
+    let stopPath = source[stopLocked.lowerBound..<restart.lowerBound]
+    let cleanupPath = source[cleanup.lowerBound..<source.endIndex]
+    return expectEqual(
+        source.contains("private var captureResourcesInstalled = false") &&
+            startPath.contains("do {") &&
+            startPath.contains("captureResourcesInstalled = true") &&
+            startPath.contains("catch {") &&
+            startPath.contains("cleanupCaptureResourcesLocked(keepRecordingFile: preserveExistingRecording)") &&
+            stopPath.contains("cleanupCaptureResourcesLocked(keepRecordingFile: keepRecordingFile)") &&
+            cleanupPath.contains("engine.inputNode.removeTap(onBus: 0)") &&
+            cleanupPath.contains("engine.stop()") &&
+            cleanupPath.contains("converter = nil") &&
+            cleanupPath.contains("recordingFile = nil") &&
+            cleanupPath.contains("NotificationCenter.default.removeObserver(configChangeObserver)") &&
+            cleanupPath.contains("removeDefaultInputDeviceListener()") &&
+            cleanupPath.contains("levelHandler = nil") &&
+            cleanupPath.contains("samplesHandler = nil") &&
+            cleanupPath.contains("onConfigurationDidChange = nil") &&
+            cleanupPath.contains("activeDeliveryGeneration = nil") &&
+            cleanupPath.contains("captureResourcesInstalled = false"),
+        true,
+        "partial start failures and non-running stops should clean installed capture resources"
+    )
+}
+
 private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
     guard let source = readSource("Sources/EventSubtitlesApp/AppDelegate.swift") else {
         fputs("FAIL: AppDelegate source should be readable\n", stderr)
@@ -198,6 +427,133 @@ private func testAppDelegateTerminatesAfterAwaitedSessionStop() -> Bool {
             source.contains("sender.reply(toApplicationShouldTerminate: true)"),
         true,
         "confirmed quit should await session stop before replying to terminate"
+    )
+}
+
+private func testStreamDeckAdapterUsesExplicitOutputCommands() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState+StreamDeck.swift") else {
+        fputs("FAIL: Stream Deck AppState adapter source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains("case .panicBlank:") &&
+            source.contains("panicBlank()") &&
+            source.contains("case .unblankOutput:") &&
+            source.contains("unblankOutput()") &&
+            source.contains("case .clearCaptions:") &&
+            source.contains("clearCaptions()"),
+        true,
+        "Stream Deck adapter should route safe output commands through explicit operations"
+    ) && expectEqual(
+        source.contains("toggleOutputBlank()"),
+        false,
+        "Stream Deck adapter should never toggle output blanking"
+    )
+}
+
+private func testStreamDeckFillRejectsUnavailableExternalDisplay() -> Bool {
+    guard let controller = readSource("Sources/EventSubtitlesApp/OutputWindowController.swift"),
+          let appState = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let adapter = readSource("Sources/EventSubtitlesApp/AppState+StreamDeck.swift")
+    else {
+        fputs("FAIL: output-fill sources should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        controller.contains("func fillExternalDisplay() -> Bool") &&
+            !controller.contains("preferredOutputScreen() ?? NSScreen.main") &&
+            controller.contains("selected != NSScreen.main") &&
+            controller.contains("return NSScreen.screens.first { $0 != NSScreen.main }"),
+        true,
+        "filled output should require a non-main external display"
+    ) && expectEqual(
+        appState.contains("func fillExternalDisplay() -> Bool") &&
+            adapter.contains("guard fillExternalDisplay() else") &&
+            adapter.contains("reason: .noExternalDisplay"),
+        true,
+        "Stream Deck fill command should reject when external fill cannot be performed"
+    )
+}
+
+private func testStreamDeckStatusUsesTypedStateFacts() -> Bool {
+    guard let adapter = readSource("Sources/EventSubtitlesApp/AppState+StreamDeck.swift") else {
+        fputs("FAIL: Stream Deck AppState adapter source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        adapter.contains("StreamDeckStatusPolicy.audioState(") &&
+            adapter.contains("isSelectedInputAvailable: isSelectedAudioInputAvailable") &&
+            adapter.contains("hasAudioFailure: hasAudioCaptureFailure") &&
+            adapter.contains("didFailToStartSession") &&
+            adapter.contains("StreamDeckStatusPolicy.captionState("),
+        true,
+        "status projection should pass typed AppState facts to Stream Deck policy"
+    ) && expectEqual(
+        adapter.contains("errorMessage.contains") ||
+            adapter.contains("errorMessage.localizedCaseInsensitiveContains") ||
+            adapter.contains("errorMessage.range"),
+        false,
+        "Stream Deck status should not classify state by searching error text"
+    )
+}
+
+private func testStreamDeckFailureFactsTrackCaptureLifecycle() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
+        fputs("FAIL: AppState source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        source.contains("var didFailToStartSession = false") &&
+            source.contains("var hasAudioCaptureFailure = false") &&
+            source.contains("var isSelectedAudioInputAvailable = false") &&
+            source.contains("didFailToStartSession = false") &&
+            source.contains("hasAudioCaptureFailure = false"),
+        true,
+        "AppState should own typed Stream Deck status facts and clear failures on start"
+    ) && expectEqual(
+        source.contains("didFailToStartSession = true") &&
+            source.contains("hasAudioCaptureFailure = true") &&
+            source.contains("self.hasAudioCaptureFailure = false") &&
+            source.contains("self.hasAudioCaptureFailure = true"),
+        true,
+        "capture start and restart paths should maintain typed failure facts"
+    )
+}
+
+private func testAppStatePublishesStreamDeckStatusForLiveStateChanges() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift") else {
+        fputs("FAIL: AppState source should be readable\n", stderr)
+        return false
+    }
+
+    let publishedProperties = [
+        "var isRunning = false { didSet { publishStreamDeckStatus() } }",
+        "var isStarting = false { didSet { publishStreamDeckStatus() } }",
+        "var audioLevel = 0.0 { didSet { publishStreamDeckStatus() } }",
+        "var isSelectedAudioInputAvailable = false { didSet { publishStreamDeckStatus() } }",
+        "var hasAudioCaptureFailure = false { didSet { publishStreamDeckStatus() } }",
+        "var didFailToStartSession = false { didSet { publishStreamDeckStatus() } }",
+        "var errorMessage: String? { didSet { publishStreamDeckStatus() } }",
+        "var outputBlanked = false { didSet { publishStreamDeckStatus() } }",
+        "var sessionSegmentCount = 0 { didSet { publishStreamDeckStatus() } }",
+        #"var sessionElapsedText = "00:00:00" { didSet { publishStreamDeckStatus() } }"#,
+        "var outputWindowVisible = false { didSet { publishStreamDeckStatus() } }",
+        "var outputWindowFilled = false { didSet { publishStreamDeckStatus() } }",
+        "var sessionStartedAt: Date? { didSet { publishStreamDeckStatus() } }",
+        "var lastCaptionActivityAt: Date? { didSet { publishStreamDeckStatus() } }"
+    ]
+
+    return expectEqual(
+        publishedProperties.allSatisfy { source.contains($0) } &&
+            source.contains("publicCaptionText = \"\"") &&
+            source.contains("publicCaptionText = display") &&
+            source.contains("sessionElapsedText = String(format:"),
+        true,
+        "AppState should broadcast Stream Deck status when live status-driving state changes"
     )
 }
 
@@ -214,7 +570,19 @@ let tests = [
     ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
     ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
-    ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop)
+    ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
+    ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
+    ("audioCapturePipelineSerializesControlOperations", testAudioCapturePipelineSerializesControlOperations),
+    ("appStateScopesConfigurationRestartToRunningSession", testAppStateScopesConfigurationRestartToRunningSession),
+    ("appStateScopesAudioCallbacksToRunningSession", testAppStateScopesAudioCallbacksToRunningSession),
+    ("audioCapturePipelineBindsInstalledCallbacksToGeneration", testAudioCapturePipelineBindsInstalledCallbacksToGeneration),
+    ("audioCapturePipelineCleansUpPartialStartResources", testAudioCapturePipelineCleansUpPartialStartResources),
+    ("appDelegateTerminatesAfterAwaitedSessionStop", testAppDelegateTerminatesAfterAwaitedSessionStop),
+    ("streamDeckAdapterUsesExplicitOutputCommands", testStreamDeckAdapterUsesExplicitOutputCommands),
+    ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),
+    ("streamDeckStatusUsesTypedStateFacts", testStreamDeckStatusUsesTypedStateFacts),
+    ("streamDeckFailureFactsTrackCaptureLifecycle", testStreamDeckFailureFactsTrackCaptureLifecycle),
+    ("appStatePublishesStreamDeckStatusForLiveStateChanges", testAppStatePublishesStreamDeckStatusForLiveStateChanges)
 ]
 
 var failed = 0
