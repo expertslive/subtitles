@@ -259,7 +259,7 @@ private func testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric() -> B
 private struct FakeVersionTextFetcher: VersionTextFetching {
     var result: Result<String, UpdateCheckFailureReason>
 
-    func fetchVersionText(from url: URL, timeout: TimeInterval) async -> Result<String, UpdateCheckFailureReason> {
+    func fetchVersionText(from url: URL, timeout: TimeInterval) async throws -> Result<String, UpdateCheckFailureReason> {
         result
     }
 }
@@ -326,6 +326,34 @@ private func testUpdateCheckerManualFailureSurfacesReason() async -> Bool {
     )
 }
 
+private func testUpdateCheckerManualHTTPStatusFailureSurfacesReason() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.httpStatus(503))))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .httpStatus(503)),
+        "manual HTTP status failure surfaces"
+    )
+}
+
+private func testUpdateCheckerManualNoStableReleaseFailureSurfacesReason() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.noStableReleaseFound)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .noStableReleaseFound),
+        "manual no-stable-release failure surfaces"
+    )
+}
+
 private func testUpdateCheckerLaunchFailureReturnsIdle() async -> Bool {
     let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.networkUnavailable)))
     let status = await checker.check(
@@ -334,6 +362,26 @@ private func testUpdateCheckerLaunchFailureReturnsIdle() async -> Bool {
         latestVersionURL: URL(string: "https://example.com/VERSION")!
     )
     return expectEqual(status, .idle, "launch network failure returns idle")
+}
+
+private func testUpdateCheckerLaunchHTTPStatusFailureReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.httpStatus(503))))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch HTTP status failure returns idle")
+}
+
+private func testUpdateCheckerLaunchNoStableReleaseFailureReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.noStableReleaseFound)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch no-stable-release failure returns idle")
 }
 
 private func testUpdateCheckerRejectsMalformedRemoteVersion() async -> Bool {
@@ -362,6 +410,45 @@ private func testUpdateCheckerRejectsMalformedLocalVersion() async -> Bool {
         .failed(currentVersion: "local-dev", reason: .invalidLocalVersion),
         "malformed local version fails"
     )
+}
+
+private func testUpdateCheckerLaunchMalformedLocalVersionReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0")))
+    let status = await checker.check(
+        currentVersionText: "local-dev",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch malformed local version returns idle")
+}
+
+private func testURLSessionVersionTextFetcherPreservesCancellation() -> Bool {
+    do {
+        _ = try URLSessionVersionTextFetcher.updateCheckFailureReason(
+            for: URLError(.cancelled),
+            taskIsCancelled: false
+        )
+        fputs("FAIL: URLSession cancellation should throw cancellation\n", stderr)
+        return false
+    } catch is CancellationError {
+        return true
+    } catch {
+        fputs("FAIL: URLSession cancellation threw unexpected error: \(error)\n", stderr)
+        return false
+    }
+}
+
+private func testURLSessionVersionTextFetcherMapsNetworkErrors() -> Bool {
+    do {
+        let reason = try URLSessionVersionTextFetcher.updateCheckFailureReason(
+            for: URLError(.notConnectedToInternet),
+            taskIsCancelled: false
+        )
+        return expectEqual(reason, .networkUnavailable, "URLSession network errors map to networkUnavailable")
+    } catch {
+        fputs("FAIL: URLSession network error should not throw: \(error)\n", stderr)
+        return false
+    }
 }
 
 private func readSource(_ relativePath: String) -> String? {
@@ -786,6 +873,8 @@ let tests = [
     ("semanticVersionSortsPrereleaseBeforeStable", testSemanticVersionSortsPrereleaseBeforeStable),
     ("semanticVersionComparesPrereleaseIdentifiersBySemVerRules", testSemanticVersionComparesPrereleaseIdentifiersBySemVerRules),
     ("semanticVersionComparesNumericPrereleaseBeforeNonNumeric", testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric),
+    ("urlSessionVersionTextFetcherPreservesCancellation", testURLSessionVersionTextFetcherPreservesCancellation),
+    ("urlSessionVersionTextFetcherMapsNetworkErrors", testURLSessionVersionTextFetcherMapsNetworkErrors),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
     ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
     ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
@@ -817,9 +906,14 @@ let asyncTests: [(String, () async -> Bool)] = [
     ("updateCheckerReportsUpToDateForOlderLatestVersion", testUpdateCheckerReportsUpToDateForOlderLatestVersion),
     ("updateCheckerReportsAvailableFromPrereleaseToStable", testUpdateCheckerReportsAvailableFromPrereleaseToStable),
     ("updateCheckerManualFailureSurfacesReason", testUpdateCheckerManualFailureSurfacesReason),
+    ("updateCheckerManualHTTPStatusFailureSurfacesReason", testUpdateCheckerManualHTTPStatusFailureSurfacesReason),
+    ("updateCheckerManualNoStableReleaseFailureSurfacesReason", testUpdateCheckerManualNoStableReleaseFailureSurfacesReason),
     ("updateCheckerLaunchFailureReturnsIdle", testUpdateCheckerLaunchFailureReturnsIdle),
+    ("updateCheckerLaunchHTTPStatusFailureReturnsIdle", testUpdateCheckerLaunchHTTPStatusFailureReturnsIdle),
+    ("updateCheckerLaunchNoStableReleaseFailureReturnsIdle", testUpdateCheckerLaunchNoStableReleaseFailureReturnsIdle),
     ("updateCheckerRejectsMalformedRemoteVersion", testUpdateCheckerRejectsMalformedRemoteVersion),
-    ("updateCheckerRejectsMalformedLocalVersion", testUpdateCheckerRejectsMalformedLocalVersion)
+    ("updateCheckerRejectsMalformedLocalVersion", testUpdateCheckerRejectsMalformedLocalVersion),
+    ("updateCheckerLaunchMalformedLocalVersionReturnsIdle", testUpdateCheckerLaunchMalformedLocalVersionReturnsIdle)
 ]
 
 for (name, test) in asyncTests {

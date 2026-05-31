@@ -55,13 +55,13 @@ public enum AppUpdateConstants {
 }
 
 public protocol VersionTextFetching: Sendable {
-    func fetchVersionText(from url: URL, timeout: TimeInterval) async -> Result<String, UpdateCheckFailureReason>
+    func fetchVersionText(from url: URL, timeout: TimeInterval) async throws -> Result<String, UpdateCheckFailureReason>
 }
 
 public struct URLSessionVersionTextFetcher: VersionTextFetching {
     public init() {}
 
-    public func fetchVersionText(from url: URL, timeout: TimeInterval) async -> Result<String, UpdateCheckFailureReason> {
+    public func fetchVersionText(from url: URL, timeout: TimeInterval) async throws -> Result<String, UpdateCheckFailureReason> {
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -82,8 +82,21 @@ public struct URLSessionVersionTextFetcher: VersionTextFetching {
             }
             return .success(text)
         } catch {
-            return .failure(.networkUnavailable)
+            return .failure(try Self.updateCheckFailureReason(for: error, taskIsCancelled: Task.isCancelled))
         }
+    }
+
+    public static func updateCheckFailureReason(
+        for error: Error,
+        taskIsCancelled: Bool
+    ) throws -> UpdateCheckFailureReason {
+        if taskIsCancelled || error is CancellationError {
+            throw CancellationError()
+        }
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            throw CancellationError()
+        }
+        return .networkUnavailable
     }
 }
 
@@ -101,13 +114,22 @@ public struct UpdateChecker: Sendable {
     ) async -> AppUpdateStatus {
         let normalizedCurrent = Self.normalizedVersionText(currentVersionText)
         guard let current = SemanticVersion(normalizedCurrent) else {
+            if mode == .launch {
+                return .idle
+            }
             return .failed(
                 currentVersion: normalizedCurrent.isEmpty ? currentVersionText : normalizedCurrent,
                 reason: .invalidLocalVersion
             )
         }
 
-        let result = await fetcher.fetchVersionText(from: latestVersionURL, timeout: mode.timeout)
+        let result: Result<String, UpdateCheckFailureReason>
+        do {
+            result = try await fetcher.fetchVersionText(from: latestVersionURL, timeout: mode.timeout)
+        } catch {
+            return .idle
+        }
+
         switch result {
         case let .failure(reason):
             if mode == .launch {
