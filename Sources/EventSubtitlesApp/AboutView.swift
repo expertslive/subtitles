@@ -9,11 +9,12 @@ struct AboutView: View {
             header
             Divider()
             updateSection
+            installSection
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 460)
-        .frame(minHeight: 300)
+        .frame(width: 620)
+        .frame(minHeight: 390)
     }
 
     private var header: some View {
@@ -47,12 +48,33 @@ struct AboutView: View {
                 .disabled(state.updateStatus == .checking)
 
                 if updateAvailable {
-                    Button("Copy Install Command") {
-                        state.copyInstallCommandToClipboard()
-                    }
                     Button("Open Release Page") {
                         state.openLatestReleasePage()
                     }
+                }
+            }
+        }
+    }
+
+    private var installSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Install Update")
+                .font(.headline)
+            Text("When you are ready to update, paste this command in Terminal. The app will not run installers automatically.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(alignment: .top, spacing: 8) {
+                Text(AppUpdateConstants.installCommand)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+
+                Button("Copy") {
+                    state.copyInstallCommandToClipboard()
                 }
             }
         }
