@@ -257,7 +257,7 @@ struct StyleWorkspace: View {
                         state.captionLineMinHold = $0
                         state.saveSettings()
                     }
-                ), range: 1.0...4.0, step: 0.1, unit: "s", fractionLength: 1)
+                ), range: 0.7...3.0, step: 0.1, unit: "s", fractionLength: 1)
 
                 SliderRow(title: "Idle flush", value: Binding(
                     get: { state.captionIdleFlushAfter },

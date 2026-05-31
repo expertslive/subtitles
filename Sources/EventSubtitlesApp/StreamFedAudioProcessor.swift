@@ -1,21 +1,40 @@
 @preconcurrency import AVFoundation
 import CoreML
+import EventSubtitlesCore
 import Foundation
 @preconcurrency import WhisperKit
 
+struct StreamFedAudioSnapshot: Sendable {
+    let samples: [Float]
+    let relativeEnergy: [Float]
+    let totalSampleCount: Int
+    let droppedSampleCount: Int
+    let streamOffsetSeconds: TimeInterval
+}
+
 /// `AudioProcessing` impl that consumes a `[Float]` stream supplied by AudioCapturePipeline
-/// instead of opening its own input device. Keeps the AudioStreamTranscriber happy by
-/// maintaining a `audioSamples` buffer that grows from yielded chunks.
+/// instead of opening its own input device. Keeps a bounded rolling sample window
+/// so live transcription does not retain an entire event day in memory.
 final class StreamFedAudioProcessor: AudioProcessing, @unchecked Sendable {
     private let lock = NSLock()
-    private var samples = ContiguousArray<Float>()
+    private var sampleBuffer: RollingAudioSampleBuffer
     private var audioEnergy: [(rel: Float, avg: Float, max: Float, min: Float)] = []
     private var energyWindowSize = 20
+    private let sampleRate: Int
+
+    init(maximumRetainedSeconds: TimeInterval = 30, sampleRate: Int = WhisperKit.sampleRate) {
+        self.sampleRate = max(1, sampleRate)
+        let maximumRetainedSamples = max(1, Int(maximumRetainedSeconds * TimeInterval(self.sampleRate)))
+        self.sampleBuffer = RollingAudioSampleBuffer(
+            maximumRetainedSamples: maximumRetainedSamples,
+            sampleRate: self.sampleRate
+        )
+    }
 
     var audioSamples: ContiguousArray<Float> {
         lock.lock()
         defer { lock.unlock() }
-        return samples
+        return ContiguousArray(sampleBuffer.samples)
     }
 
     var relativeEnergy: [Float] {
@@ -40,7 +59,7 @@ final class StreamFedAudioProcessor: AudioProcessing, @unchecked Sendable {
     /// `AudioStreamTranscriber`'s VAD can detect speech.
     func ingest(_ chunk: [Float]) {
         lock.lock()
-        samples.append(contentsOf: chunk)
+        sampleBuffer.append(chunk)
 
         // Match WhisperKit's AudioProcessor.processBuffer: silence baseline = min avg energy
         // over the last `relativeEnergyWindow` buffers.
@@ -56,11 +75,30 @@ final class StreamFedAudioProcessor: AudioProcessing, @unchecked Sendable {
         lock.unlock()
     }
 
+    func snapshot() -> StreamFedAudioSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return StreamFedAudioSnapshot(
+            samples: sampleBuffer.samples,
+            relativeEnergy: audioEnergy.map { $0.rel },
+            totalSampleCount: sampleBuffer.totalSampleCount,
+            droppedSampleCount: sampleBuffer.droppedSampleCount,
+            streamOffsetSeconds: sampleBuffer.streamOffsetSeconds
+        )
+    }
+
+    func reset() {
+        lock.lock()
+        sampleBuffer.reset()
+        audioEnergy.removeAll(keepingCapacity: true)
+        lock.unlock()
+    }
+
     func purgeAudioSamples(keepingLast keep: Int) {
         lock.lock()
-        if samples.count > keep {
-            samples.removeFirst(samples.count - keep)
-        }
+        let retained = sampleBuffer.samples
+        sampleBuffer.reset()
+        sampleBuffer.append(Array(retained.suffix(max(0, keep))))
         lock.unlock()
     }
 

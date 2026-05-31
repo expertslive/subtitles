@@ -103,37 +103,42 @@ public struct LineStack: Sendable {
         pending.removeAll()
     }
 
-    public mutating func push(_ line: String, now: Date) {
+    @discardableResult
+    public mutating func push(_ line: String, now: Date) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
         if visible.count < maxLines {
             visible.append(VisibleLine(text: trimmed, revealedAt: now))
+            return trimmed
         } else {
             pending.append(trimmed)
+            return nil
         }
     }
 
-    /// Drain as many pending lines as `lineMinHold` permits. Returns true if
-    /// the visible set changed during this tick.
+    /// Drain as many pending lines as `lineMinHold` permits. Returns lines that
+    /// became visible during this tick.
     @discardableResult
-    public mutating func tick(now: Date, lineMinHold: TimeInterval) -> Bool {
-        var changed = false
+    public mutating func tick(now: Date, lineMinHold: TimeInterval) -> [String] {
+        var revealed: [String] = []
         while !pending.isEmpty {
             if visible.count < maxLines {
-                visible.append(VisibleLine(text: pending.removeFirst(), revealedAt: now))
-                changed = true
+                let line = pending.removeFirst()
+                visible.append(VisibleLine(text: line, revealedAt: now))
+                revealed.append(line)
                 continue
             }
             guard let oldest = visible.first else { break }
             if now.timeIntervalSince(oldest.revealedAt) >= lineMinHold {
                 visible.removeFirst()
-                visible.append(VisibleLine(text: pending.removeFirst(), revealedAt: now))
-                changed = true
+                let line = pending.removeFirst()
+                visible.append(VisibleLine(text: line, revealedAt: now))
+                revealed.append(line)
             } else {
                 break
             }
         }
-        return changed
+        return revealed
     }
 }
 
@@ -142,7 +147,7 @@ public struct LineStack: Sendable {
 public struct LinePacedRoller: Sendable {
     public var lineBuilder: LineBuilder
     public var lineStack: LineStack
-    private var emittedSinceDrain: [String] = []
+    private var revealedSinceDrain: [String] = []
 
     public init(targetCharactersPerLine: Int, maxLines: Int) {
         self.lineBuilder = LineBuilder(targetCharactersPerLine: targetCharactersPerLine)
@@ -153,10 +158,14 @@ public struct LinePacedRoller: Sendable {
         lineStack.visibleLines
     }
 
+    public var hasPendingOutput: Bool {
+        !lineBuilder.pendingBuffer.isEmpty || lineStack.pendingCount > 0
+    }
+
     public mutating func reset() {
         lineBuilder.reset()
         lineStack.reset()
-        emittedSinceDrain.removeAll()
+        revealedSinceDrain.removeAll()
     }
 
     public mutating func updateLayout(targetCharactersPerLine: Int, maxLines: Int) {
@@ -164,12 +173,11 @@ public struct LinePacedRoller: Sendable {
         lineStack.maxLines = max(1, maxLines)
     }
 
-    /// Returns lines that the line builder has emitted since the last call,
-    /// then clears the internal accumulator. Use this to record the displayed
-    /// transcript history for the operator.
-    public mutating func drainEmittedLines() -> [String] {
-        let result = emittedSinceDrain
-        emittedSinceDrain.removeAll()
+    /// Returns lines that became visible since the last call, then clears the
+    /// internal accumulator. Use this to record displayed transcript history.
+    public mutating func drainRevealedLines() -> [String] {
+        let result = revealedSinceDrain
+        revealedSinceDrain.removeAll()
         return result
     }
 
@@ -185,8 +193,9 @@ public struct LinePacedRoller: Sendable {
         let combined = lineBuilder.pendingBuffer + separator + phrase.text
         if !lineBuilder.pendingBuffer.isEmpty && combined.count > lineBuilder.targetCharactersPerLine {
             if let flushed = lineBuilder.flushBuffer() {
-                lineStack.push(flushed, now: now)
-                emittedSinceDrain.append(flushed)
+                if let revealed = lineStack.push(flushed, now: now) {
+                    revealedSinceDrain.append(revealed)
+                }
             }
         }
         let emitted: [String]
@@ -196,8 +205,9 @@ public struct LinePacedRoller: Sendable {
             emitted = lineBuilder.ingest(phrase.text, now: now)
         }
         for line in emitted {
-            lineStack.push(line, now: now)
-            emittedSinceDrain.append(line)
+            if let revealed = lineStack.push(line, now: now) {
+                revealedSinceDrain.append(revealed)
+            }
         }
     }
 
@@ -211,9 +221,12 @@ public struct LinePacedRoller: Sendable {
     ) -> Bool {
         let flushed = lineBuilder.tick(now: now, idleFlushAfter: idleFlushAfter)
         for line in flushed {
-            lineStack.push(line, now: now)
-            emittedSinceDrain.append(line)
+            if let revealed = lineStack.push(line, now: now) {
+                revealedSinceDrain.append(revealed)
+            }
         }
-        return lineStack.tick(now: now, lineMinHold: lineMinHold)
+        let revealed = lineStack.tick(now: now, lineMinHold: lineMinHold)
+        revealedSinceDrain.append(contentsOf: revealed)
+        return !revealed.isEmpty
     }
 }

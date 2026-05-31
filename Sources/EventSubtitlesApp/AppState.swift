@@ -103,7 +103,7 @@ final class AppState {
     var captionUnstableWordCount = CaptionStabilityLevel.calm.defaultUnstableWordCount
     var captionMinimumHold = CaptionStabilityLevel.calm.defaultMinimumHold
     var captionMaximumLatency = 3.0
-    var captionLineMinHold = 2.0
+    var captionLineMinHold = 1.2
     var captionIdleFlushAfter = 1.5
     /// Seconds of caption inactivity after which the green output auto-clears.
     /// 0 disables the auto-clear (captions stay on screen until cleared manually
@@ -1097,7 +1097,7 @@ final class AppState {
         captionUnstableWordCount = settings.captionUnstableWordCount ?? captionStabilityLevel.defaultUnstableWordCount
         captionMinimumHold = settings.captionMinimumHold ?? captionStabilityLevel.defaultMinimumHold
         captionMaximumLatency = settings.captionMaximumLatency ?? 3.0
-        captionLineMinHold = settings.captionLineMinHold ?? 2.0
+        captionLineMinHold = settings.captionLineMinHold ?? 1.2
         captionIdleFlushAfter = settings.captionIdleFlushAfter ?? 1.5
         captionAutoClearAfter = settings.captionAutoClearAfter ?? 5.0
         selectedAudioInputDeviceID = settings.selectedAudioInputDeviceID
@@ -1783,11 +1783,11 @@ final class AppState {
             idleFlushAfter: configuration.idleFlushAfter
         )
 
-        // Record any lines the line builder emitted since the last refresh into
-        // the history / session log. This is the rolling-mode equivalent of
-        // calmBlocks's recordDisplayedEvent on each scheduler cue.
-        let emittedLines = linePacedRoller.drainEmittedLines()
-        for line in emittedLines {
+        // Record only lines that actually became visible on the green output.
+        // Pending roll-up lines must not appear in History before the audience
+        // has had a chance to read them.
+        let revealedLines = linePacedRoller.drainRevealedLines()
+        for line in revealedLines {
             let event = TranscriptEvent(
                 sourceText: line,
                 displayText: line,
@@ -1822,8 +1822,8 @@ final class AppState {
             idleFlushAfter: 0
         )
 
-        let emittedLines = linePacedRoller.drainEmittedLines()
-        for line in emittedLines {
+        let revealedLines = linePacedRoller.drainRevealedLines()
+        for line in revealedLines {
             let event = TranscriptEvent(
                 sourceText: line,
                 displayText: line,
@@ -1860,6 +1860,9 @@ final class AppState {
         guard !publicCaptionText.isEmpty else { return }
         guard let lastActivity = lastCaptionActivityAt else { return }
         guard now.timeIntervalSince(lastActivity) >= captionAutoClearAfter else { return }
+        if captionDisplayMode == .liveRollUp, linePacedRoller.hasPendingOutput {
+            return
+        }
 
         captionStabilityEngine.reset()
         captionDisplayScheduler.reset()

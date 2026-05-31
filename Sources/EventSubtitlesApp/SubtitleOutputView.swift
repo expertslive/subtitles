@@ -1,4 +1,5 @@
 import AppKit
+import EventSubtitlesCore
 import SwiftUI
 
 struct SubtitleOutputView: View {
@@ -62,7 +63,9 @@ struct SubtitleOutputView: View {
         .padding(.vertical, state.safeMargin)
         .offset(x: state.captionOffsetX, y: state.captionOffsetY)
         .animation(
-            (animatesCaptionChanges && !reduceMotion) ? .smooth(duration: 0.18) : nil,
+            (animatesCaptionChanges && !reduceMotion && state.captionDisplayMode != .liveRollUp)
+                ? .smooth(duration: 0.18)
+                : nil,
             value: CaptionAnimationKey(
                 text: state.captionLayout.text,
                 position: state.captionPosition.rawValue,
@@ -73,11 +76,18 @@ struct SubtitleOutputView: View {
     }
 
     private func captionLines(availableWidth: CGFloat) -> some View {
-        VStack(spacing: state.lineSpacing) {
-            ForEach(Array(state.visibleCaptionLines.enumerated()), id: \.offset) { _, line in
-                Text(line)
+        let rows = CaptionRowLayout.rows(
+            for: state.visibleCaptionLines,
+            maxLines: state.maxLines,
+            reserveEmptyRows: state.captionDisplayMode == .liveRollUp
+        )
+
+        return VStack(spacing: state.lineSpacing) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
+                Text(line.isEmpty ? " " : line)
                     .font(.custom(state.fontName, size: state.fontSize).weight(.bold))
                     .foregroundStyle(state.foregroundColor)
+                    .opacity(line.isEmpty ? 0 : 1)
                     .multilineTextAlignment(.center)
                     .lineSpacing(state.lineSpacing)
                     .fixedSize(horizontal: false, vertical: true)

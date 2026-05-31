@@ -5,17 +5,25 @@ import Foundation
 
 final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     private var whisperKit: WhisperKit?
-    private var streamTranscriber: AudioStreamTranscriber?
     private var streamProcessor: StreamFedAudioProcessor?
+    private var streamTranscribeTask: TranscribeTask?
     private var streamRunnerTask: Task<Void, Never>?
-    private var lastConfirmedSegmentCount = 0
+    private let maximumRetainedAudioSeconds: TimeInterval
+    private var lastProcessedTotalSampleCount = 0
+    private var lastConfirmedSegmentEndSeconds: Float = 0
     private var lastPartialText = ""
     private var modelName: String
     private var loadedModelName: String?
     private var streamStartedAt: Date?
+    private let requiredSegmentsForConfirmation = 0
+    private let silenceThreshold: Float = 0.25
+    private let compressionCheckWindow = 60
+    private let minimumDecodeAudioSeconds: Float = 2
+    private let maximumLiveDecodeWindowSeconds: Float = 12
 
-    init(modelName: String = "large-v3-v20240930_626MB") {
+    init(modelName: String = "large-v3-v20240930_626MB", maximumRetainedAudioSeconds: TimeInterval = 30) {
         self.modelName = modelName
+        self.maximumRetainedAudioSeconds = maximumRetainedAudioSeconds
     }
 
     func setModelName(_ modelName: String) {
@@ -43,7 +51,8 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) async throws {
         await stop(unloadModel: loadedModelName != modelName)
-        lastConfirmedSegmentCount = 0
+        lastProcessedTotalSampleCount = 0
+        lastConfirmedSegmentEndSeconds = 0
         lastPartialText = ""
         streamStartedAt = Date()
 
@@ -75,49 +84,45 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             verbose: false,
             task: .transcribe,
             language: whisperLanguageCode(for: configuration.sourceLanguage),
+            temperature: 0.0,
+            temperatureIncrementOnFallback: 0.0,
+            temperatureFallbackCount: 0,
             usePrefillPrompt: true,
             detectLanguage: configuration.sourceLanguage == .automatic,
             skipSpecialTokens: true,
             withoutTimestamps: false,
-            wordTimestamps: true,
+            wordTimestamps: false,
             promptTokens: nil,
             chunkingStrategy: .vad
         )
 
-        let processor = StreamFedAudioProcessor()
+        let processor = StreamFedAudioProcessor(maximumRetainedSeconds: maximumRetainedAudioSeconds)
         self.streamProcessor = processor
 
-        let transcriber = AudioStreamTranscriber(
+        let transcribeTask = TranscribeTask(
+            currentTimings: TranscriptionTimings(),
+            progress: Progress(),
+            audioProcessor: processor,
             audioEncoder: kit.audioEncoder,
             featureExtractor: kit.featureExtractor,
             segmentSeeker: kit.segmentSeeker,
             textDecoder: kit.textDecoder,
-            tokenizer: tokenizer,
-            audioProcessor: processor,
-            decodingOptions: decodeOptions,
-            requiredSegmentsForConfirmation: 1,
-            silenceThreshold: 0.25,
-            compressionCheckWindow: 60,
-            useVAD: true
-        ) { [weak self] _, newState in
-            self?.handleState(newState, configuredLanguage: configuration.sourceLanguage, onResult: onResult)
-        }
+            tokenizer: tokenizer
+        )
+        streamTranscribeTask = transcribeTask
 
-        streamTranscriber = transcriber
-
-        // `startStreamTranscription()` enters a realtime loop that does not return until
-        // `stopStreamTranscription()` flips `state.isRecording = false`. Run it as a
-        // detached background task instead of awaiting it here, otherwise this method
-        // (and every caller) would hang forever and `stop` would never run.
-        // Audio samples are pushed in via `ingest(_:)` from the capture pipeline's tap.
-        streamRunnerTask = Task.detached(priority: .userInitiated) { [weak transcriber] in
-            guard let transcriber else { return }
-            do {
-                try await transcriber.startStreamTranscription()
-            } catch {
-                // WhisperKit logs internally; a clean error path from the detached task
-                // is not part of the SpeechTranscribing contract.
-            }
+        // Own the streaming loop instead of using WhisperKit's AudioStreamTranscriber.
+        // That actor tracks progress by retained buffer length, which stalls once a
+        // rolling buffer reaches its cap. We track total ingested samples instead.
+        streamRunnerTask = Task.detached(priority: .userInitiated) { [weak self, weak processor, weak transcribeTask] in
+            guard let self, let processor, let transcribeTask else { return }
+            await self.runRealtimeLoop(
+                processor: processor,
+                transcribeTask: transcribeTask,
+                decodeOptions: decodeOptions,
+                configuredLanguage: configuration.sourceLanguage,
+                onResult: onResult
+            )
         }
     }
 
@@ -127,17 +132,16 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
     private func stop(unloadModel: Bool) async {
         streamProcessor = nil
-
-        await streamTranscriber?.stopStreamTranscription()
+        streamTranscribeTask = nil
         streamRunnerTask?.cancel()
         streamRunnerTask = nil
-        streamTranscriber = nil
         if unloadModel {
             whisperKit = nil
             loadedModelName = nil
         }
         streamStartedAt = nil
-        lastConfirmedSegmentCount = 0
+        lastProcessedTotalSampleCount = 0
+        lastConfirmedSegmentEndSeconds = 0
         lastPartialText = ""
     }
 
@@ -153,49 +157,164 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         )
     }
 
-    private func handleState(
-        _ state: AudioStreamTranscriber.State,
+    private func runRealtimeLoop(
+        processor: StreamFedAudioProcessor,
+        transcribeTask: TranscribeTask,
+        decodeOptions: DecodingOptions,
+        configuredLanguage: SourceLanguage,
+        onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
+    ) async {
+        while !Task.isCancelled, streamProcessor === processor, streamTranscribeTask === transcribeTask {
+            do {
+                try await transcribeCurrentBuffer(
+                    processor: processor,
+                    transcribeTask: transcribeTask,
+                    decodeOptions: decodeOptions,
+                    configuredLanguage: configuredLanguage,
+                    onResult: onResult
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func transcribeCurrentBuffer(
+        processor: StreamFedAudioProcessor,
+        transcribeTask: TranscribeTask,
+        decodeOptions: DecodingOptions,
+        configuredLanguage: SourceLanguage,
+        onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
+    ) async throws {
+        let snapshot = processor.snapshot()
+        let nextBufferSize = snapshot.totalSampleCount - lastProcessedTotalSampleCount
+        let nextBufferSeconds = Float(nextBufferSize) / Float(WhisperKit.sampleRate)
+
+        guard nextBufferSeconds >= minimumDecodeAudioSeconds else {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            return
+        }
+
+        let voiceDetected = AudioProcessor.isVoiceDetected(
+            in: snapshot.relativeEnergy,
+            nextBufferInSeconds: nextBufferSeconds,
+            silenceThreshold: silenceThreshold
+        )
+        guard voiceDetected else {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            return
+        }
+
+        lastProcessedTotalSampleCount = snapshot.totalSampleCount
+
+        var options = decodeOptions
+        let snapshotDurationSeconds = Float(snapshot.samples.count) / Float(WhisperKit.sampleRate)
+        let confirmedClipTimestamp = max(0, lastConfirmedSegmentEndSeconds - Float(snapshot.streamOffsetSeconds))
+        let recentWindowStart = max(0, snapshotDurationSeconds - maximumLiveDecodeWindowSeconds)
+        let clipTimestamp = max(confirmedClipTimestamp, recentWindowStart)
+        options.clipTimestamps = [clipTimestamp]
+        let offset = Float(snapshot.streamOffsetSeconds)
+        let checkWindow = compressionCheckWindow
+
+        let transcription = try await transcribeTask.run(audioArray: snapshot.samples, decodeOptions: options) { progress in
+            return Self.shouldStopEarly(progress: progress, options: options, compressionCheckWindow: checkWindow)
+        }
+
+        let absoluteSegments = transcription.segments.map { offsetSegment($0, by: offset) }
+        publishConfirmedSegments(
+            absoluteSegments,
+            configuredLanguage: configuredLanguage,
+            onResult: onResult
+        )
+    }
+
+    private func publishConfirmedSegments(
+        _ segments: [TranscriptionSegment],
         configuredLanguage: SourceLanguage,
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) {
-        let confirmedSegments = state.confirmedSegments
-        if confirmedSegments.count > lastConfirmedSegmentCount {
-            let newSegments = confirmedSegments[lastConfirmedSegmentCount...]
-            lastConfirmedSegmentCount = confirmedSegments.count
-
-            for segment in newSegments {
-                let trimmed = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    continue
-                }
-
-                onResult(
-                    SpeechRecognitionResult(
-                        text: trimmed,
-                        language: configuredLanguage,
-                        isFinal: true,
-                        startedAt: absoluteDate(for: segment.start),
-                        endedAt: absoluteDate(for: segment.end),
-                        words: recognizedWords(in: [segment])
-                    )
-                )
-            }
+        guard segments.count > requiredSegmentsForConfirmation else {
+            publishPartialText(
+                partialText(from: segments),
+                configuredLanguage: configuredLanguage,
+                words: recognizedWords(in: segments),
+                onResult: onResult
+            )
+            return
         }
 
-        let partialText = partialText(from: state)
-        if !partialText.isEmpty, partialText != lastPartialText {
-            lastPartialText = partialText
+        let confirmed = segments.dropLast(requiredSegmentsForConfirmation)
+        let unconfirmed = segments.suffix(requiredSegmentsForConfirmation)
+
+        for segment in confirmed where segment.end > lastConfirmedSegmentEndSeconds {
+            let trimmed = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            lastConfirmedSegmentEndSeconds = max(lastConfirmedSegmentEndSeconds, segment.end)
             onResult(
                 SpeechRecognitionResult(
-                    text: partialText,
+                    text: trimmed,
                     language: configuredLanguage,
-                    isFinal: false,
-                    startedAt: nil,
-                    endedAt: Date(),
-                    words: recognizedWords(in: state.unconfirmedSegments)
+                    isFinal: true,
+                    startedAt: absoluteDate(for: segment.start),
+                    endedAt: absoluteDate(for: segment.end),
+                    words: recognizedWords(in: [segment])
                 )
             )
         }
+
+        publishPartialText(
+            partialText(from: unconfirmed),
+            configuredLanguage: configuredLanguage,
+            words: recognizedWords(in: unconfirmed),
+            onResult: onResult
+        )
+    }
+
+    private func publishPartialText(
+        _ partialText: String,
+        configuredLanguage: SourceLanguage,
+        words: [RecognizedWord],
+        onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
+    ) {
+        guard !partialText.isEmpty, partialText != lastPartialText else {
+            return
+        }
+        lastPartialText = partialText
+        onResult(
+            SpeechRecognitionResult(
+                text: partialText,
+                language: configuredLanguage,
+                isFinal: false,
+                startedAt: nil,
+                endedAt: Date(),
+                words: words
+            )
+        )
+    }
+
+    private static func shouldStopEarly(
+        progress: TranscriptionProgress,
+        options: DecodingOptions,
+        compressionCheckWindow: Int
+    ) -> Bool? {
+        let currentTokens = progress.tokens
+        if currentTokens.count > compressionCheckWindow {
+            let checkTokens = Array(currentTokens.suffix(compressionCheckWindow))
+            let compressionRatio = TextUtilities.compressionRatio(of: checkTokens)
+            if compressionRatio > options.compressionRatioThreshold ?? 0.0 {
+                return false
+            }
+        }
+        if let avgLogprob = progress.avgLogprob, let logProbThreshold = options.logProbThreshold {
+            if avgLogprob < logProbThreshold {
+                return false
+            }
+        }
+        return nil
     }
 
     private func recognizedWords(in segments: some Sequence<TranscriptionSegment>) -> [RecognizedWord] {
@@ -220,24 +339,11 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         return words
     }
 
-    private func partialText(from state: AudioStreamTranscriber.State) -> String {
-        let segmentText = state.unconfirmedSegments
+    private func partialText(from segments: some Sequence<TranscriptionSegment>) -> String {
+        segments
             .map(\.text)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if !segmentText.isEmpty {
-            return segmentText
-        }
-
-        let currentText = state.currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        // WhisperKit sets `state.currentText = "Waiting for speech..."` as an internal
-        // idle placeholder when the realtime loop has no audio to transcribe. That string
-        // is not a transcript — filter it before it reaches the operator/audience UI.
-        if currentText == "Waiting for speech..." {
-            return ""
-        }
-        return currentText
     }
 
     private func whisperLanguageCode(for language: SourceLanguage) -> String? {
@@ -253,6 +359,19 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
     private func absoluteDate(for streamSeconds: Float) -> Date? {
         streamStartedAt?.addingTimeInterval(TimeInterval(streamSeconds))
+    }
+
+    private func offsetSegment(_ segment: TranscriptionSegment, by offset: Float) -> TranscriptionSegment {
+        var copy = segment
+        copy.start += offset
+        copy.end += offset
+        copy.words = segment.words?.map { word in
+            var copy = word
+            copy.start += offset
+            copy.end += offset
+            return copy
+        }
+        return copy
     }
 }
 enum WhisperKitTranscriberError: LocalizedError {

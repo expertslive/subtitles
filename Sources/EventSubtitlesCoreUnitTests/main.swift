@@ -220,6 +220,89 @@ private func testSemanticVersionSortsPrereleaseBeforeStable() -> Bool {
         expectEqual(stable > prerelease, true, "stable sorts after prerelease")
 }
 
+private func testRollingAudioBufferRetainsOnlyConfiguredWindow() -> Bool {
+    var buffer = RollingAudioSampleBuffer(maximumRetainedSamples: 5, sampleRate: 10)
+
+    buffer.append([1, 2, 3])
+    buffer.append([4, 5, 6, 7])
+
+    return expectEqual(buffer.samples, [3, 4, 5, 6, 7], "rolling buffer should keep newest samples") &&
+        expectEqual(buffer.droppedSampleCount, 2, "rolling buffer should track dropped sample count") &&
+        expectEqual(buffer.totalSampleCount, 7, "rolling buffer should track total ingested samples") &&
+        expectEqual(buffer.streamOffsetSeconds, 0.2, "rolling buffer offset should reflect dropped samples")
+}
+
+private func testRollingAudioBufferResetClearsSamplesAndOffset() -> Bool {
+    var buffer = RollingAudioSampleBuffer(maximumRetainedSamples: 3, sampleRate: 10)
+
+    buffer.append([1, 2, 3, 4, 5])
+    buffer.reset()
+
+    return expectEqual(buffer.samples, [], "rolling buffer reset should clear samples") &&
+        expectEqual(buffer.droppedSampleCount, 0, "rolling buffer reset should clear dropped count") &&
+        expectEqual(buffer.totalSampleCount, 0, "rolling buffer reset should clear total count") &&
+        expectEqual(buffer.streamOffsetSeconds, 0, "rolling buffer reset should clear offset")
+}
+
+private func testCaptionRowLayoutReservesBottomAlignedRowsForRollup() -> Bool {
+    expectEqual(
+        CaptionRowLayout.rows(for: ["First line"], maxLines: 2, reserveEmptyRows: true),
+        ["", "First line"],
+        "roll-up output should reserve empty top row so a single line stays in the bottom slot"
+    ) && expectEqual(
+        CaptionRowLayout.rows(for: ["First line", "Second line"], maxLines: 2, reserveEmptyRows: true),
+        ["First line", "Second line"],
+        "roll-up output should use both reserved rows when two lines are visible"
+    )
+}
+
+private func testCaptionRowLayoutDoesNotReserveRowsForBlockCaptions() -> Bool {
+    expectEqual(
+        CaptionRowLayout.rows(for: ["Only line"], maxLines: 2, reserveEmptyRows: false),
+        ["Only line"],
+        "non-roll-up captions should not render placeholder rows"
+    )
+}
+
+private func testLinePacedRollerOnlyDrainsVisibleLinesForHistory() -> Bool {
+    let start = Date(timeIntervalSince1970: 1_000)
+    var roller = LinePacedRoller(targetCharactersPerLine: 10, maxLines: 1)
+
+    roller.ingest(
+        StableCaptionPhrase(text: "one two three four five", committedAt: start, isFinal: true),
+        now: start
+    )
+
+    let firstDrain = roller.drainRevealedLines()
+    let visibleAfterIngest = roller.visibleLines
+    _ = roller.tick(now: start.addingTimeInterval(0.5), lineMinHold: 1.0, idleFlushAfter: 1.0)
+    let earlyDrain = roller.drainRevealedLines()
+    _ = roller.tick(now: start.addingTimeInterval(1.1), lineMinHold: 1.0, idleFlushAfter: 1.0)
+    let secondDrain = roller.drainRevealedLines()
+
+    return expectEqual(firstDrain, ["one two"], "history should initially drain only the line that became visible") &&
+        expectEqual(visibleAfterIngest, ["one two"], "only the first line should be visible while remaining lines are pending") &&
+        expectEqual(earlyDrain, [], "history should not record pending lines before they are visible") &&
+        expectEqual(secondDrain, ["three four"], "history should record pending lines when they roll onto the green screen")
+}
+
+private func testLinePacedRollerReportsPendingOutputUntilQueuedLinesReveal() -> Bool {
+    let start = Date(timeIntervalSince1970: 1_000)
+    var roller = LinePacedRoller(targetCharactersPerLine: 10, maxLines: 1)
+
+    roller.ingest(
+        StableCaptionPhrase(text: "one two three four", committedAt: start, isFinal: true),
+        now: start
+    )
+
+    let pendingAfterIngest = roller.hasPendingOutput
+    _ = roller.tick(now: start.addingTimeInterval(1.1), lineMinHold: 1.0, idleFlushAfter: 1.0)
+    let pendingAfterQueuedLineReveals = roller.hasPendingOutput
+
+    return expectEqual(pendingAfterIngest, true, "roller should report queued lines that still need to reach the output") &&
+        expectEqual(pendingAfterQueuedLineReveals, false, "roller should stop reporting pending output after queued lines reveal")
+}
+
 private func testSemanticVersionComparesPrereleaseIdentifiersBySemVerRules() -> Bool {
     let orderedValues = [
         "3.4.0-alpha",
@@ -913,6 +996,117 @@ private func testAppStatePublishesStreamDeckStatusForLiveStateChanges() -> Bool 
     )
 }
 
+private func testWhisperKitTranscriberUsesBoundedStreamingBuffer() -> Bool {
+    guard let transcriber = readSource("Sources/EventSubtitlesApp/WhisperKitTranscriber.swift"),
+          let processor = readSource("Sources/EventSubtitlesApp/StreamFedAudioProcessor.swift")
+    else {
+        fputs("FAIL: Whisper streaming sources should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        processor.contains("RollingAudioSampleBuffer") &&
+            processor.contains("maximumRetainedSeconds") &&
+            transcriber.contains("private let maximumRetainedAudioSeconds") &&
+            transcriber.contains("maximumRetainedAudioSeconds: TimeInterval = 30") &&
+            transcriber.contains("TranscribeTask(") &&
+            transcriber.contains("streamOffsetSeconds") &&
+            !transcriber.contains("AudioStreamTranscriber("),
+        true,
+        "WhisperKit transcriber should use a bounded buffer and owned streaming loop instead of AudioStreamTranscriber"
+    )
+}
+
+private func testWhisperKitTranscriberDoesNotReplayUnconfirmedProgress() -> Bool {
+    guard let transcriber = readSource("Sources/EventSubtitlesApp/WhisperKitTranscriber.swift") else {
+        fputs("FAIL: WhisperKit transcriber source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        transcriber.contains("private let requiredSegmentsForConfirmation = 0") &&
+            transcriber.contains("let transcription = try await transcribeTask.run(audioArray: snapshot.samples, decodeOptions: options) { progress in") &&
+            !transcriber.contains("self?.handleProgress") &&
+            !transcriber.contains("private func handleProgress") &&
+            !transcriber.contains("lastPartialText = \"\"\n        let absoluteSegments"),
+        true,
+        "WhisperKit transcriber should confirm completed segments and avoid replaying decoder progress into public captions"
+    )
+}
+
+private func testWhisperKitTranscriberUsesDeterministicLiveDecodeOptions() -> Bool {
+    guard let transcriber = readSource("Sources/EventSubtitlesApp/WhisperKitTranscriber.swift") else {
+        fputs("FAIL: WhisperKit transcriber source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        transcriber.contains("temperature: 0.0") &&
+            transcriber.contains("temperatureIncrementOnFallback: 0.0") &&
+            transcriber.contains("temperatureFallbackCount: 0") &&
+            transcriber.contains("wordTimestamps: false"),
+        true,
+        "live Whisper decoding should stay deterministic and avoid expensive word-timestamp alignment"
+    )
+}
+
+private func testWhisperKitTranscriberCapsRealtimeDecodeBacklog() -> Bool {
+    guard let transcriber = readSource("Sources/EventSubtitlesApp/WhisperKitTranscriber.swift") else {
+        fputs("FAIL: WhisperKit transcriber source should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        transcriber.contains("private let maximumLiveDecodeWindowSeconds: Float = 12") &&
+            transcriber.contains("private let minimumDecodeAudioSeconds: Float = 2") &&
+            transcriber.contains("let recentWindowStart = max(0, snapshotDurationSeconds - maximumLiveDecodeWindowSeconds)") &&
+            transcriber.contains("let clipTimestamp = max(confirmedClipTimestamp, recentWindowStart)"),
+        true,
+        "live Whisper decoding should cap stale backlog instead of dumping old captions after a long decode gap"
+    )
+}
+
+private func testRollupOutputReservesRowsAndDisablesTextAnimation() -> Bool {
+    guard let outputView = readSource("Sources/EventSubtitlesApp/SubtitleOutputView.swift"),
+          let appState = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let style = readSource("Sources/EventSubtitlesApp/StyleWorkspace.swift")
+    else {
+        fputs("FAIL: roll-up output sources should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        outputView.contains("CaptionRowLayout.rows(") &&
+            outputView.contains("reserveEmptyRows: state.captionDisplayMode == .liveRollUp") &&
+            outputView.contains("state.captionDisplayMode != .liveRollUp") &&
+            outputView.contains("line.isEmpty ? \" \" : line") &&
+            appState.contains("var captionLineMinHold = 1.2") &&
+            appState.contains("settings.captionLineMinHold ?? 1.2") &&
+            style.contains("range: 0.7...3.0"),
+        true,
+        "roll-up output should reserve rows, avoid smooth text animation, and use a faster default line hold"
+    )
+}
+
+private func testRollupAutoClearWaitsForPendingOutput() -> Bool {
+    guard let appState = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let clearStart = appState.range(of: "private func checkAutoClearIfNeeded(now: Date)"),
+          let flushStart = appState.range(of: "private func flushIdleCaptionTailIfNeeded", range: clearStart.upperBound..<appState.endIndex)
+    else {
+        fputs("FAIL: AppState auto-clear markers should exist\n", stderr)
+        return false
+    }
+
+    let autoClear = appState[clearStart.lowerBound..<flushStart.lowerBound]
+    return expectEqual(
+        autoClear.contains("captionDisplayMode == .liveRollUp") &&
+            autoClear.contains("linePacedRoller.hasPendingOutput") &&
+            autoClear.contains("return"),
+        true,
+        "roll-up auto-clear should not reset queued lines before they reach the green output"
+    )
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -931,6 +1125,12 @@ let tests = [
     ("semanticVersionRejectsMalformedPrereleaseIdentifiers", testSemanticVersionRejectsMalformedPrereleaseIdentifiers),
     ("semanticVersionComparesNumerically", testSemanticVersionComparesNumerically),
     ("semanticVersionSortsPrereleaseBeforeStable", testSemanticVersionSortsPrereleaseBeforeStable),
+    ("rollingAudioBufferRetainsOnlyConfiguredWindow", testRollingAudioBufferRetainsOnlyConfiguredWindow),
+    ("rollingAudioBufferResetClearsSamplesAndOffset", testRollingAudioBufferResetClearsSamplesAndOffset),
+    ("captionRowLayoutReservesBottomAlignedRowsForRollup", testCaptionRowLayoutReservesBottomAlignedRowsForRollup),
+    ("captionRowLayoutDoesNotReserveRowsForBlockCaptions", testCaptionRowLayoutDoesNotReserveRowsForBlockCaptions),
+    ("linePacedRollerOnlyDrainsVisibleLinesForHistory", testLinePacedRollerOnlyDrainsVisibleLinesForHistory),
+    ("linePacedRollerReportsPendingOutputUntilQueuedLinesReveal", testLinePacedRollerReportsPendingOutputUntilQueuedLinesReveal),
     ("semanticVersionComparesPrereleaseIdentifiersBySemVerRules", testSemanticVersionComparesPrereleaseIdentifiersBySemVerRules),
     ("semanticVersionComparesNumericPrereleaseBeforeNonNumeric", testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric),
     ("urlSessionVersionTextFetcherPreservesCancellation", testURLSessionVersionTextFetcherPreservesCancellation),
@@ -951,7 +1151,13 @@ let tests = [
     ("streamDeckFillRejectsUnavailableExternalDisplay", testStreamDeckFillRejectsUnavailableExternalDisplay),
     ("streamDeckStatusUsesTypedStateFacts", testStreamDeckStatusUsesTypedStateFacts),
     ("streamDeckFailureFactsTrackCaptureLifecycle", testStreamDeckFailureFactsTrackCaptureLifecycle),
-    ("appStatePublishesStreamDeckStatusForLiveStateChanges", testAppStatePublishesStreamDeckStatusForLiveStateChanges)
+    ("appStatePublishesStreamDeckStatusForLiveStateChanges", testAppStatePublishesStreamDeckStatusForLiveStateChanges),
+    ("whisperKitTranscriberUsesBoundedStreamingBuffer", testWhisperKitTranscriberUsesBoundedStreamingBuffer),
+    ("whisperKitTranscriberDoesNotReplayUnconfirmedProgress", testWhisperKitTranscriberDoesNotReplayUnconfirmedProgress),
+    ("whisperKitTranscriberUsesDeterministicLiveDecodeOptions", testWhisperKitTranscriberUsesDeterministicLiveDecodeOptions),
+    ("whisperKitTranscriberCapsRealtimeDecodeBacklog", testWhisperKitTranscriberCapsRealtimeDecodeBacklog),
+    ("rollupOutputReservesRowsAndDisablesTextAnimation", testRollupOutputReservesRowsAndDisablesTextAnimation),
+    ("rollupAutoClearWaitsForPendingOutput", testRollupAutoClearWaitsForPendingOutput)
 ]
 
 var failed = 0
