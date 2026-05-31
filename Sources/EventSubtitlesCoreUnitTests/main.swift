@@ -188,6 +188,17 @@ private func testSemanticVersionRejectsMalformedVersions() -> Bool {
     }
 }
 
+private func testSemanticVersionRejectsMalformedPrereleaseIdentifiers() -> Bool {
+    let values = ["3.4.0-alpha..1", "3.4.0-.alpha", "3.4.0-alpha."]
+    return values.allSatisfy { value in
+        if SemanticVersion(value) == nil {
+            return true
+        }
+        fputs("FAIL: malformed semantic prerelease should be rejected: \(value)\n", stderr)
+        return false
+    }
+}
+
 private func testSemanticVersionComparesNumerically() -> Bool {
     guard let low = SemanticVersion("3.9.0"),
           let high = SemanticVersion("3.10.0"),
@@ -207,6 +218,42 @@ private func testSemanticVersionSortsPrereleaseBeforeStable() -> Bool {
     }
     return expectEqual(prerelease < stable, true, "prerelease sorts before stable") &&
         expectEqual(stable > prerelease, true, "stable sorts after prerelease")
+}
+
+private func testSemanticVersionComparesPrereleaseIdentifiersBySemVerRules() -> Bool {
+    let orderedValues = [
+        "3.4.0-alpha",
+        "3.4.0-alpha.1",
+        "3.4.0-alpha.beta",
+        "3.4.0-beta",
+        "3.4.0-beta.2",
+        "3.4.0-beta.11",
+        "3.4.0-rc.1",
+        "3.4.0"
+    ]
+    let versions = orderedValues.compactMap(SemanticVersion.init)
+    guard versions.count == orderedValues.count else {
+        fputs("FAIL: semantic prerelease ordering versions should parse\n", stderr)
+        return false
+    }
+
+    return versions.indices.dropLast().allSatisfy { index in
+        let result = versions[index] < versions[index + 1]
+        if !result {
+            fputs("FAIL: expected \(orderedValues[index]) to sort before \(orderedValues[index + 1])\n", stderr)
+        }
+        return result
+    }
+}
+
+private func testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric() -> Bool {
+    guard let numeric = SemanticVersion("3.4.0-1"),
+          let nonNumeric = SemanticVersion("3.4.0-alpha") else {
+        fputs("FAIL: numeric and non-numeric prerelease versions should parse\n", stderr)
+        return false
+    }
+
+    return expectEqual(numeric < nonNumeric, true, "numeric prerelease identifier sorts before non-numeric")
 }
 
 private func readSource(_ relativePath: String) -> String? {
@@ -626,8 +673,11 @@ let tests = [
     ("semanticVersionParsesStableVersion", testSemanticVersionParsesStableVersion),
     ("semanticVersionParsesPrereleaseVersion", testSemanticVersionParsesPrereleaseVersion),
     ("semanticVersionRejectsMalformedVersions", testSemanticVersionRejectsMalformedVersions),
+    ("semanticVersionRejectsMalformedPrereleaseIdentifiers", testSemanticVersionRejectsMalformedPrereleaseIdentifiers),
     ("semanticVersionComparesNumerically", testSemanticVersionComparesNumerically),
     ("semanticVersionSortsPrereleaseBeforeStable", testSemanticVersionSortsPrereleaseBeforeStable),
+    ("semanticVersionComparesPrereleaseIdentifiersBySemVerRules", testSemanticVersionComparesPrereleaseIdentifiersBySemVerRules),
+    ("semanticVersionComparesNumericPrereleaseBeforeNonNumeric", testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
     ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
     ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),

@@ -57,7 +57,7 @@ public struct SemanticVersion: Comparable, Equatable, Sendable {
         case (.some, nil):
             return true
         case let (.some(left), .some(right)):
-            return left.localizedStandardCompare(right) == .orderedAscending
+            return comparePrerelease(left, right) == .orderedAscending
         }
     }
 
@@ -73,9 +73,47 @@ public struct SemanticVersion: Comparable, Equatable, Sendable {
     }
 
     private static func isValidPrerelease(_ value: String) -> Bool {
-        guard !value.isEmpty else { return false }
-        return value.allSatisfy { character in
-            character.isLetter || character.isNumber || character == "." || character == "-"
+        let identifiers = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard !identifiers.isEmpty else { return false }
+        return identifiers.allSatisfy { identifier in
+            !identifier.isEmpty && identifier.allSatisfy { character in
+                character.isLetter || character.isNumber || character == "-"
+            }
+        }
+    }
+
+    private static func comparePrerelease(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let leftIdentifiers = lhs.split(separator: ".", omittingEmptySubsequences: false)
+        let rightIdentifiers = rhs.split(separator: ".", omittingEmptySubsequences: false)
+
+        for (left, right) in zip(leftIdentifiers, rightIdentifiers) {
+            let comparison = comparePrereleaseIdentifier(left, right)
+            if comparison != .orderedSame {
+                return comparison
+            }
+        }
+
+        if leftIdentifiers.count == rightIdentifiers.count {
+            return .orderedSame
+        }
+        return leftIdentifiers.count < rightIdentifiers.count ? .orderedAscending : .orderedDescending
+    }
+
+    private static func comparePrereleaseIdentifier(_ lhs: Substring, _ rhs: Substring) -> ComparisonResult {
+        let leftNumber = parseNumericPart(lhs)
+        let rightNumber = parseNumericPart(rhs)
+
+        switch (leftNumber, rightNumber) {
+        case let (.some(left), .some(right)):
+            if left == right { return .orderedSame }
+            return left < right ? .orderedAscending : .orderedDescending
+        case (.some, nil):
+            return .orderedAscending
+        case (nil, .some):
+            return .orderedDescending
+        case (nil, nil):
+            if lhs == rhs { return .orderedSame }
+            return String(lhs) < String(rhs) ? .orderedAscending : .orderedDescending
         }
     }
 }
