@@ -58,6 +58,7 @@ final class AppState {
     var translationEngine: TranslationEngineChoice = .ruleBased
     var translationCommandPath = ""
     var translationCommandArguments = "--from {source} --to {target}"
+    var updateStatus: AppUpdateStatus = .idle
 
     var currentEvent: TranscriptEvent?
     var publicCaptionText = "" {
@@ -146,8 +147,10 @@ final class AppState {
     @ObservationIgnored private let commandLineTranslator = CommandLineTranslator()
     @ObservationIgnored private let sessionRecorder = SessionRecorder()
     @ObservationIgnored private let sessionLogger = SessionLogger()
+    @ObservationIgnored private let updateChecker = UpdateChecker()
     @ObservationIgnored private let settingsStore = AppSettingsStore()
     @ObservationIgnored private var pendingSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var updateCheckTask: Task<Void, Never>?
     @ObservationIgnored private let sleepPreventer = SleepPreventer()
     @ObservationIgnored private var captionStabilityEngine = CaptionStabilityEngine()
     @ObservationIgnored private var captionDisplayScheduler = CaptionDisplayScheduler()
@@ -177,6 +180,10 @@ final class AppState {
         refreshResourceUsage()
         updateSleepPreventionStatusForIdle()
         startStreamDeckControlServer()
+    }
+
+    deinit {
+        updateCheckTask?.cancel()
     }
 
     private func startStreamDeckControlServer() {
@@ -447,6 +454,49 @@ final class AppState {
 
     func clearError() {
         errorMessage = nil
+    }
+
+    func checkForUpdatesOnLaunch() {
+        guard updateStatus == .idle, updateCheckTask == nil else {
+            return
+        }
+        runUpdateCheck(mode: .launch)
+    }
+
+    func checkForUpdatesManually() {
+        runUpdateCheck(mode: .manual)
+    }
+
+    func copyInstallCommandToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(AppUpdateConstants.installCommand, forType: .string)
+    }
+
+    func openLatestReleasePage() {
+        NSWorkspace.shared.open(AppUpdateConstants.latestReleaseURL)
+    }
+
+    var currentAppVersionText: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.3.0"
+    }
+
+    var currentAppBuildText: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "8"
+    }
+
+    private func runUpdateCheck(mode: UpdateCheckMode) {
+        updateCheckTask?.cancel()
+        updateStatus = .checking
+        let currentVersion = currentAppVersionText
+        let checker = updateChecker
+        updateCheckTask = Task { [weak self] in
+            let status = await checker.check(currentVersionText: currentVersion, mode: mode)
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                self.updateStatus = status
+                self.updateCheckTask = nil
+            }
+        }
     }
 
     func selectOutputDisplay(_ id: String?) {
