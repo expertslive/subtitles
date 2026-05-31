@@ -1,0 +1,203 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to test-build (no Release will be created on dispatch)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  resolve-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.derive.outputs.tag }}
+      app_version: ${{ steps.derive.outputs.app_version }}
+      is_prerelease: ${{ steps.derive.outputs.is_prerelease }}
+    steps:
+      - name: Derive version from trigger
+        id: derive
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="${{ inputs.tag }}"
+            [[ -z "$tag" ]] && tag="v0.0.0-dispatch"
+          fi
+          app_version="${tag#v}"
+          # Prerelease if the version part contains a hyphen (e.g. 0.0.0-rc1)
+          if [[ "$app_version" == *-* ]]; then
+            is_prerelease="true"
+          else
+            is_prerelease="false"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$tag app_version=$app_version is_prerelease=$is_prerelease"
+
+  test:
+    name: Tests
+    runs-on: macos-14
+    needs: resolve-version
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift executable test targets
+        run: |
+          swift run EventSubtitlesCoreUnitTests
+          swift run EventSubtitlesRemoteControlUnitTests
+          swift run EventSubtitlesSmokeTests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Stream Deck plugin tests
+        working-directory: StreamDeck/com.eventsubtitles.subtitles.sdPlugin
+        run: |
+          npm ci
+          npm test
+
+  build-app:
+    name: Build app bundle
+    runs-on: macos-14
+    needs: [resolve-version, test]
+    env:
+      APP_VERSION: ${{ needs.resolve-version.outputs.app_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build .app bundle
+        run: ./scripts/build_app_bundle.sh
+      - name: Normalize mtimes for deterministic zip
+        # Without this, the zip's embedded file timestamps depend on
+        # checkout time, breaking the "byte-identical reruns" property.
+        # SOURCE_DATE_EPOCH 1700000000 == 2023-11-14T22:13:20Z, a stable
+        # epoch chosen once for this repo; do not change it.
+        run: |
+          find build/EventSubtitles.app -exec touch -t 202311142213.20 {} +
+      - name: Zip bundle as EventSubtitles.zip
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/EventSubtitles.app build/EventSubtitles.zip
+      - name: Write VERSION asset
+        run: printf '%s\n' "$APP_VERSION" > build/VERSION
+      - name: Upload app artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: |
+            build/EventSubtitles.zip
+            build/VERSION
+          if-no-files-found: error
+
+  build-plugin:
+    name: Build Stream Deck plugin
+    runs-on: macos-14
+    needs: [resolve-version, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: npm ci, build, pack
+        working-directory: StreamDeck/com.eventsubtitles.subtitles.sdPlugin
+        run: |
+          npm ci
+          npm run build
+          npm run pack
+      - name: Rename plugin and build profile manifest
+        run: |
+          mkdir -p build
+          mv build/com.eventsubtitles.subtitles.streamDeckPlugin \
+             build/EventSubtitles.streamDeckPlugin
+
+          shopt -s nullglob
+          profiles=(StreamDeck/com.eventsubtitles.subtitles.sdPlugin/profiles/*.streamDeckProfile)
+          if (( ${#profiles[@]} > 0 )); then
+            : > build/MANIFEST.profiles
+            for src in "${profiles[@]}"; do
+              name="$(basename "$src")"
+              cp "$src" "build/$name"
+              echo "$name" >> build/MANIFEST.profiles
+            done
+            echo "Bundled ${#profiles[@]} profile(s)."
+          else
+            echo "No profiles to bundle."
+          fi
+      - name: Upload plugin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin
+          path: |
+            build/EventSubtitles.streamDeckPlugin
+            build/MANIFEST.profiles
+            build/*.streamDeckProfile
+          if-no-files-found: warn
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [resolve-version, build-app, build-plugin]
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download app artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app
+          path: release
+      - name: Download plugin artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin
+          path: release
+      - name: Copy install.sh into release set
+        run: cp scripts/install.sh release/install.sh
+      - name: Generate SHA256SUMS (excludes itself)
+        working-directory: release
+        run: |
+          # Hash every payload file in deterministic order.
+          # SHA256SUMS itself is created last and not included.
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 shasum -a 256 \
+            | sed 's| \./| |' \
+            > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
+          name: ${{ needs.resolve-version.outputs.tag }}
+          prerelease: ${{ needs.resolve-version.outputs.is_prerelease == 'true' }}
+          body: |
+            ## Install on an event Mac
+
+            Latest:
+            ```bash
+            curl -fsSL https://github.com/expertslive/subtitles/releases/latest/download/install.sh | bash
+            ```
+
+            Pin this version:
+            ```bash
+            curl -fsSL https://github.com/expertslive/subtitles/releases/download/${{ needs.resolve-version.outputs.tag }}/install.sh \
+              | bash -s -- --version ${{ needs.resolve-version.outputs.tag }}
+            ```
+
+            See `docs/install.md` for the manual first-launch and Stream Deck steps.
+          files: |
+            release/EventSubtitles.zip
+            release/EventSubtitles.streamDeckPlugin
+            release/install.sh
+            release/VERSION
+            release/MANIFEST.profiles
+            release/*.streamDeckProfile
+            release/SHA256SUMS
+          fail_on_unmatched_files: false
