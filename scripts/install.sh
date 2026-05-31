@@ -170,7 +170,7 @@ download_all_assets() {
 quit_running_app() {
   local bid="com.eventsubtitles.app"
   # Is it running? pgrep -lf matches the binary path; bail early if not.
-  if ! pgrep -f "/Applications/EventSubtitles.app/Contents/MacOS/EventSubtitles" >/dev/null 2>&1; then
+  if ! pgrep -f "$APPS_DIR/EventSubtitles.app/Contents/MacOS/EventSubtitles" >/dev/null 2>&1; then
     return 0
   fi
   log "asking EventSubtitles to quit"
@@ -179,7 +179,7 @@ quit_running_app() {
   local i
   for i in 1 2 3 4 5; do
     sleep 1
-    pgrep -f "/Applications/EventSubtitles.app/Contents/MacOS/EventSubtitles" >/dev/null 2>&1 \
+    pgrep -f "$APPS_DIR/EventSubtitles.app/Contents/MacOS/EventSubtitles" >/dev/null 2>&1 \
       || return 0
   done
   die "EventSubtitles is still running and refuses to quit" \
