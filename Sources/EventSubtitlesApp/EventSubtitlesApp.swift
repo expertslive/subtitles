@@ -1,9 +1,9 @@
-import AppKit
 import SwiftUI
 
 @main
 struct EventSubtitlesApp: App {
     @State private var appState = AppState()
+    @State private var aboutWindowController = AboutWindowController()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
@@ -11,12 +11,15 @@ struct EventSubtitlesApp: App {
             OperatorView()
                 .environment(appState)
                 .frame(minWidth: 1180, minHeight: 760)
-                .onAppear { appDelegate.state = appState }
+                .onAppear {
+                    appDelegate.state = appState
+                    appState.checkForUpdatesOnLaunch()
+                }
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About Subtitles") {
-                    showAboutPanel()
+                    aboutWindowController.show(appState: appState)
                 }
             }
 
@@ -77,30 +80,6 @@ struct EventSubtitlesApp: App {
                 .environment(appState)
                 .frame(minWidth: 640, minHeight: 480)
         }
-    }
-
-    private func showAboutPanel() {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "3.3.0"
-        let build = info?["CFBundleVersion"] as? String ?? "8"
-        let credits = NSAttributedString(
-            string: """
-            Offline live subtitles and Dutch/English translation for events.
-            Powered by local WhisperKit on Apple Silicon.
-
-            Session logs stay local: transcripts, SRT, JSONL, glossary, and audio.
-            """,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-            ]
-        )
-
-        NSApplication.shared.orderFrontStandardAboutPanel(options: [
-            .applicationName: "Subtitles",
-            .applicationVersion: version,
-            .version: "Build \(build)",
-            .credits: credits
-        ])
     }
 }
 

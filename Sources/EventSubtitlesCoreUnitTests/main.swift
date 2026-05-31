@@ -155,10 +155,366 @@ private func testCaptionLineFitterIncludesOversizedSingleLine() -> Bool {
     return expectEqual(picked, ["huge wraps to four"], "oversized newest line included alone")
 }
 
+private func testSemanticVersionParsesStableVersion() -> Bool {
+    guard let version = SemanticVersion("3.4.0") else {
+        fputs("FAIL: stable semantic version should parse\n", stderr)
+        return false
+    }
+    return expectEqual(version.major, 3, "semantic major") &&
+        expectEqual(version.minor, 4, "semantic minor") &&
+        expectEqual(version.patch, 0, "semantic patch") &&
+        expectEqual(version.prerelease, nil, "semantic prerelease")
+}
+
+private func testSemanticVersionParsesPrereleaseVersion() -> Bool {
+    guard let version = SemanticVersion("3.4.0-rc1") else {
+        fputs("FAIL: prerelease semantic version should parse\n", stderr)
+        return false
+    }
+    return expectEqual(version.major, 3, "prerelease semantic major") &&
+        expectEqual(version.minor, 4, "prerelease semantic minor") &&
+        expectEqual(version.patch, 0, "prerelease semantic patch") &&
+        expectEqual(version.prerelease, "rc1", "semantic prerelease suffix")
+}
+
+private func testSemanticVersionRejectsMalformedVersions() -> Bool {
+    let values = ["", "3", "3.4", "3.4.x", "v3.4.0", "3.4.0-", "3.4.0+build", "3.4.0 rc1"]
+    return values.allSatisfy { value in
+        if SemanticVersion(value) == nil {
+            return true
+        }
+        fputs("FAIL: malformed semantic version should be rejected: \(value)\n", stderr)
+        return false
+    }
+}
+
+private func testSemanticVersionRejectsMalformedPrereleaseIdentifiers() -> Bool {
+    let values = ["3.4.0-alpha..1", "3.4.0-.alpha", "3.4.0-alpha."]
+    return values.allSatisfy { value in
+        if SemanticVersion(value) == nil {
+            return true
+        }
+        fputs("FAIL: malformed semantic prerelease should be rejected: \(value)\n", stderr)
+        return false
+    }
+}
+
+private func testSemanticVersionComparesNumerically() -> Bool {
+    guard let low = SemanticVersion("3.9.0"),
+          let high = SemanticVersion("3.10.0"),
+          let patch = SemanticVersion("3.10.1") else {
+        fputs("FAIL: comparison semantic versions should parse\n", stderr)
+        return false
+    }
+    return expectEqual(high > low, true, "minor comparison should be numeric") &&
+        expectEqual(patch > high, true, "patch comparison should be numeric")
+}
+
+private func testSemanticVersionSortsPrereleaseBeforeStable() -> Bool {
+    guard let prerelease = SemanticVersion("3.4.0-rc1"),
+          let stable = SemanticVersion("3.4.0") else {
+        fputs("FAIL: prerelease comparison semantic versions should parse\n", stderr)
+        return false
+    }
+    return expectEqual(prerelease < stable, true, "prerelease sorts before stable") &&
+        expectEqual(stable > prerelease, true, "stable sorts after prerelease")
+}
+
+private func testSemanticVersionComparesPrereleaseIdentifiersBySemVerRules() -> Bool {
+    let orderedValues = [
+        "3.4.0-alpha",
+        "3.4.0-alpha.1",
+        "3.4.0-alpha.beta",
+        "3.4.0-beta",
+        "3.4.0-beta.2",
+        "3.4.0-beta.11",
+        "3.4.0-rc.1",
+        "3.4.0"
+    ]
+    let versions = orderedValues.compactMap(SemanticVersion.init)
+    guard versions.count == orderedValues.count else {
+        fputs("FAIL: semantic prerelease ordering versions should parse\n", stderr)
+        return false
+    }
+
+    return versions.indices.dropLast().allSatisfy { index in
+        let result = versions[index] < versions[index + 1]
+        if !result {
+            fputs("FAIL: expected \(orderedValues[index]) to sort before \(orderedValues[index + 1])\n", stderr)
+        }
+        return result
+    }
+}
+
+private func testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric() -> Bool {
+    guard let numeric = SemanticVersion("3.4.0-1"),
+          let nonNumeric = SemanticVersion("3.4.0-alpha") else {
+        fputs("FAIL: numeric and non-numeric prerelease versions should parse\n", stderr)
+        return false
+    }
+
+    return expectEqual(numeric < nonNumeric, true, "numeric prerelease identifier sorts before non-numeric")
+}
+
+private struct FakeVersionTextFetcher: VersionTextFetching {
+    var result: Result<String, UpdateCheckFailureReason>
+
+    func fetchVersionText(from url: URL, timeout: TimeInterval) async throws -> Result<String, UpdateCheckFailureReason> {
+        result
+    }
+}
+
+private func testUpdateCheckerReportsUpToDateForEqualVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0\n")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .upToDate(currentVersion: "3.4.0"), "equal version is up to date")
+}
+
+private func testUpdateCheckerReportsAvailableForNewerVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.5.0")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .available(currentVersion: "3.4.0", latestVersion: "3.5.0"),
+        "newer latest version is available"
+    )
+}
+
+private func testUpdateCheckerReportsUpToDateForOlderLatestVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.3.0")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .upToDate(currentVersion: "3.4.0"), "older latest version is not an update")
+}
+
+private func testUpdateCheckerReportsAvailableFromPrereleaseToStable() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0-rc1",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .available(currentVersion: "3.4.0-rc1", latestVersion: "3.4.0"),
+        "stable release updates matching prerelease"
+    )
+}
+
+private func testUpdateCheckerManualFailureSurfacesReason() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.networkUnavailable)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .networkUnavailable),
+        "manual network failure surfaces"
+    )
+}
+
+private func testUpdateCheckerManualHTTPStatusFailureSurfacesReason() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.httpStatus(503))))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .httpStatus(503)),
+        "manual HTTP status failure surfaces"
+    )
+}
+
+private func testUpdateCheckerManualNoStableReleaseFailureSurfacesReason() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.noStableReleaseFound)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .noStableReleaseFound),
+        "manual no-stable-release failure surfaces"
+    )
+}
+
+private func testUpdateCheckerLaunchFailureReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.networkUnavailable)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch network failure returns idle")
+}
+
+private func testUpdateCheckerLaunchHTTPStatusFailureReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.httpStatus(503))))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch HTTP status failure returns idle")
+}
+
+private func testUpdateCheckerLaunchNoStableReleaseFailureReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .failure(.noStableReleaseFound)))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch no-stable-release failure returns idle")
+}
+
+private func testUpdateCheckerRejectsMalformedRemoteVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("not-a-version")))
+    let status = await checker.check(
+        currentVersionText: "3.4.0",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "3.4.0", reason: .invalidRemoteVersion),
+        "malformed remote version fails"
+    )
+}
+
+private func testUpdateCheckerRejectsMalformedLocalVersion() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0")))
+    let status = await checker.check(
+        currentVersionText: "local-dev",
+        mode: .manual,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(
+        status,
+        .failed(currentVersion: "local-dev", reason: .invalidLocalVersion),
+        "malformed local version fails"
+    )
+}
+
+private func testUpdateCheckerLaunchMalformedLocalVersionReturnsIdle() async -> Bool {
+    let checker = UpdateChecker(fetcher: FakeVersionTextFetcher(result: .success("3.4.0")))
+    let status = await checker.check(
+        currentVersionText: "local-dev",
+        mode: .launch,
+        latestVersionURL: URL(string: "https://example.com/VERSION")!
+    )
+    return expectEqual(status, .idle, "launch malformed local version returns idle")
+}
+
+private func testURLSessionVersionTextFetcherPreservesCancellation() -> Bool {
+    do {
+        _ = try URLSessionVersionTextFetcher.updateCheckFailureReason(
+            for: URLError(.cancelled),
+            taskIsCancelled: false
+        )
+        fputs("FAIL: URLSession cancellation should throw cancellation\n", stderr)
+        return false
+    } catch is CancellationError {
+        return true
+    } catch {
+        fputs("FAIL: URLSession cancellation threw unexpected error: \(error)\n", stderr)
+        return false
+    }
+}
+
+private func testURLSessionVersionTextFetcherMapsNetworkErrors() -> Bool {
+    do {
+        let reason = try URLSessionVersionTextFetcher.updateCheckFailureReason(
+            for: URLError(.notConnectedToInternet),
+            taskIsCancelled: false
+        )
+        return expectEqual(reason, .networkUnavailable, "URLSession network errors map to networkUnavailable")
+    } catch {
+        fputs("FAIL: URLSession network error should not throw: \(error)\n", stderr)
+        return false
+    }
+}
+
 private func readSource(_ relativePath: String) -> String? {
     let sourceURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         .appendingPathComponent(relativePath)
     return try? String(contentsOf: sourceURL, encoding: .utf8)
+}
+
+private func testAppStateUpdateChecksDoNotRestartInFlightChecks() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let runStart = source.range(of: "private func runUpdateCheck(mode: UpdateCheckMode)"),
+          let selectOutput = source.range(of: "func selectOutputDisplay", range: runStart.upperBound..<source.endIndex)
+    else {
+        fputs("FAIL: AppState update-check lifecycle markers should exist\n", stderr)
+        return false
+    }
+
+    let runUpdateCheck = source[runStart.lowerBound..<selectOutput.lowerBound]
+    return expectEqual(
+        runUpdateCheck.contains("guard updateStatus != .checking, updateCheckTask == nil else") &&
+            runUpdateCheck.contains("return") &&
+            !runUpdateCheck.contains("updateCheckTask?.cancel()"),
+        true,
+        "manual update checks should no-op instead of canceling and restarting an in-flight check"
+    )
+}
+
+private func testAppStateLaunchUpdateCheckAttemptsOncePerProcess() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let launchStart = source.range(of: "func checkForUpdatesOnLaunch()"),
+          let manualStart = source.range(of: "func checkForUpdatesManually()", range: launchStart.upperBound..<source.endIndex)
+    else {
+        fputs("FAIL: AppState launch update-check markers should exist\n", stderr)
+        return false
+    }
+
+    let launchCheck = source[launchStart.lowerBound..<manualStart.lowerBound]
+    return expectEqual(
+        source.contains("@ObservationIgnored private var hasAttemptedLaunchUpdateCheck = false") &&
+            launchCheck.contains("guard !hasAttemptedLaunchUpdateCheck, updateStatus == .idle, updateCheckTask == nil else") &&
+            launchCheck.contains("hasAttemptedLaunchUpdateCheck = true") &&
+            launchCheck.contains("runUpdateCheck(mode: .launch)"),
+        true,
+        "launch update checks should be attempted at most once per app process"
+    )
+}
+
+private func testAppStateUpdateVersionFallbacksAreNeutral() -> Bool {
+    guard let source = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let versionStart = source.range(of: "var currentAppVersionText: String"),
+          let runStart = source.range(of: "private func runUpdateCheck", range: versionStart.upperBound..<source.endIndex)
+    else {
+        fputs("FAIL: AppState version fallback markers should exist\n", stderr)
+        return false
+    }
+
+    let versionAccessors = source[versionStart.lowerBound..<runStart.lowerBound]
+    return expectEqual(
+        versionAccessors.contains(#"bundleInfoString(for: "CFBundleShortVersionString") ?? "unknown-local""#) &&
+            versionAccessors.contains(#"bundleInfoString(for: "CFBundleVersion") ?? "local""#) &&
+            versionAccessors.contains("trimmingCharacters(in: .whitespacesAndNewlines)") &&
+            !source.contains(#"?? "3.3.0""#) &&
+            !source.contains(#"?? "8""#),
+        true,
+        "AppState should use bundle version values first and neutral local fallbacks instead of stale release constants"
+    )
 }
 
 private func testAppStateStartOnlyRunsSessionAfterCaptureSucceeds() -> Bool {
@@ -569,6 +925,19 @@ let tests = [
     ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil),
     ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
     ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
+    ("semanticVersionParsesStableVersion", testSemanticVersionParsesStableVersion),
+    ("semanticVersionParsesPrereleaseVersion", testSemanticVersionParsesPrereleaseVersion),
+    ("semanticVersionRejectsMalformedVersions", testSemanticVersionRejectsMalformedVersions),
+    ("semanticVersionRejectsMalformedPrereleaseIdentifiers", testSemanticVersionRejectsMalformedPrereleaseIdentifiers),
+    ("semanticVersionComparesNumerically", testSemanticVersionComparesNumerically),
+    ("semanticVersionSortsPrereleaseBeforeStable", testSemanticVersionSortsPrereleaseBeforeStable),
+    ("semanticVersionComparesPrereleaseIdentifiersBySemVerRules", testSemanticVersionComparesPrereleaseIdentifiersBySemVerRules),
+    ("semanticVersionComparesNumericPrereleaseBeforeNonNumeric", testSemanticVersionComparesNumericPrereleaseBeforeNonNumeric),
+    ("urlSessionVersionTextFetcherPreservesCancellation", testURLSessionVersionTextFetcherPreservesCancellation),
+    ("urlSessionVersionTextFetcherMapsNetworkErrors", testURLSessionVersionTextFetcherMapsNetworkErrors),
+    ("appStateUpdateChecksDoNotRestartInFlightChecks", testAppStateUpdateChecksDoNotRestartInFlightChecks),
+    ("appStateLaunchUpdateCheckAttemptsOncePerProcess", testAppStateLaunchUpdateCheckAttemptsOncePerProcess),
+    ("appStateUpdateVersionFallbacksAreNeutral", testAppStateUpdateVersionFallbacksAreNeutral),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
     ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
     ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
@@ -588,6 +957,30 @@ let tests = [
 var failed = 0
 for (name, test) in tests {
     if test() {
+        print("PASS: \(name)")
+    } else {
+        failed += 1
+    }
+}
+
+let asyncTests: [(String, () async -> Bool)] = [
+    ("updateCheckerReportsUpToDateForEqualVersion", testUpdateCheckerReportsUpToDateForEqualVersion),
+    ("updateCheckerReportsAvailableForNewerVersion", testUpdateCheckerReportsAvailableForNewerVersion),
+    ("updateCheckerReportsUpToDateForOlderLatestVersion", testUpdateCheckerReportsUpToDateForOlderLatestVersion),
+    ("updateCheckerReportsAvailableFromPrereleaseToStable", testUpdateCheckerReportsAvailableFromPrereleaseToStable),
+    ("updateCheckerManualFailureSurfacesReason", testUpdateCheckerManualFailureSurfacesReason),
+    ("updateCheckerManualHTTPStatusFailureSurfacesReason", testUpdateCheckerManualHTTPStatusFailureSurfacesReason),
+    ("updateCheckerManualNoStableReleaseFailureSurfacesReason", testUpdateCheckerManualNoStableReleaseFailureSurfacesReason),
+    ("updateCheckerLaunchFailureReturnsIdle", testUpdateCheckerLaunchFailureReturnsIdle),
+    ("updateCheckerLaunchHTTPStatusFailureReturnsIdle", testUpdateCheckerLaunchHTTPStatusFailureReturnsIdle),
+    ("updateCheckerLaunchNoStableReleaseFailureReturnsIdle", testUpdateCheckerLaunchNoStableReleaseFailureReturnsIdle),
+    ("updateCheckerRejectsMalformedRemoteVersion", testUpdateCheckerRejectsMalformedRemoteVersion),
+    ("updateCheckerRejectsMalformedLocalVersion", testUpdateCheckerRejectsMalformedLocalVersion),
+    ("updateCheckerLaunchMalformedLocalVersionReturnsIdle", testUpdateCheckerLaunchMalformedLocalVersionReturnsIdle)
+]
+
+for (name, test) in asyncTests {
+    if await test() {
         print("PASS: \(name)")
     } else {
         failed += 1
