@@ -20,8 +20,9 @@ Out of scope:
 - Replacing the running app bundle from inside the app.
 - Downloading app zip or Stream Deck plugin artifacts in the app.
 - Updating Elgato Stream Deck itself.
-- Checking prerelease versions.
+- Checking prerelease update channels or offering latest prerelease builds.
 - Mandatory update enforcement.
+- Persistent dismissal, "skip this version", or "remind me later" preference storage.
 
 ## User Workflow
 
@@ -29,10 +30,10 @@ Out of scope:
 
 1. The app launches.
 2. After the main window is ready, the app checks the latest stable release version once.
-3. The check uses a short timeout and does not block the UI.
+3. The check uses a 3-second request timeout and does not block the UI.
 4. If no update is available, nothing interrupts the operator.
 5. If an update is available, the result is stored and shown the next time the operator opens **About Subtitles**.
-6. If the network check fails, the launch-time failure is silent unless the operator later opens About and manually checks.
+6. If the launch-time check fails for any reason, the failure is silent and the status returns to `idle`. If the operator later opens About, it shows update status as unknown until they manually check.
 
 ### Manual check
 
@@ -40,6 +41,8 @@ Out of scope:
 2. The app opens a custom About window.
 3. The operator can press **Check for Updates**.
 4. The About window shows one of:
+   - `Update status unknown.`
+   - `Checking for updates...`
    - `You are up to date.`
    - `Update available: <latest version>.`
    - `Could not check for updates.`
@@ -69,6 +72,8 @@ https://github.com/expertslive/subtitles/releases/latest/download/VERSION
 
 The response is expected to be a single semantic version string such as `3.4.0`. The `/latest/` URL intentionally resolves only stable GitHub Releases, not prereleases.
 
+The fetched text is normalized before parsing: remove a UTF-8 byte order mark if present, trim ASCII whitespace including `\r` and `\n`, and reject the result if it is empty.
+
 The release page link shown in the UI is:
 
 ```text
@@ -79,9 +84,11 @@ https://github.com/expertslive/subtitles/releases/latest
 
 - `UpdateChecker`
   - Fetches the latest version text.
-  - Applies a short request timeout.
+  - Applies a 3-second timeout for the automatic launch check.
+  - Applies a 5-second timeout for a manual **Check for Updates** request.
   - Parses and validates the version string.
   - Compares it with the installed version.
+  - Distinguishes failure categories for UI detail: network error, HTTP error, no stable release found, invalid remote version, and invalid local version.
 
 - `AppUpdateStatus`
   - Represents UI state:
@@ -89,11 +96,12 @@ https://github.com/expertslive/subtitles/releases/latest
     - `checking`
     - `upToDate(currentVersion)`
     - `available(currentVersion, latestVersion)`
-    - `failed(currentVersion, message)`
+    - `failed(currentVersion, reason)`
 
 - `SemanticVersion`
-  - Parses `major.minor.patch`.
+  - Parses `major.minor.patch` with an optional prerelease suffix such as `-rc1`.
   - Compares versions numerically, not lexically.
+  - Sorts prerelease versions before the stable release with the same numeric core, so `3.4.0-rc1 < 3.4.0`.
   - Rejects malformed values instead of guessing.
 
 - `AboutWindowController` or SwiftUI About scene wrapper
@@ -103,13 +111,25 @@ https://github.com/expertslive/subtitles/releases/latest
 
 ### State ownership
 
-`AppState` owns update status so the launch check and About window observe the same result. Closing the About window does not clear the update result. Dismissal is session-local: the next app launch checks again and can show the update again.
+`AppState` owns update status so the launch check and About window observe the same result. The initial state is `idle`, rendered as `Update status unknown.` in About. Closing the About window does not clear the update result. Dismissal is session-local: the next app launch checks again and can show the update again.
 
-The launch check runs once per app process. Manual **Check for Updates** can run again at any time.
+The launch check runs once per app process. Manual **Check for Updates** can run again after the current check finishes. While `checking`, the button is disabled so repeated clicks do not queue overlapping requests.
+
+The install command and release URLs are app-level constants, shared by update checking, **Copy Install Command**, and **Open Release Page**. If the repository path changes, there should be one source location to edit.
 
 ## UI Design
 
 The standard macOS About panel is replaced with a custom **About Subtitles** window because the standard panel is not suited for dynamic controls.
+
+The menu hook uses the existing SwiftUI command replacement:
+
+```swift
+CommandGroup(replacing: .appInfo) {
+    Button("About Subtitles") { ... }
+}
+```
+
+The button opens the custom About window instead of calling `NSApplication.shared.orderFrontStandardAboutPanel`.
 
 The window shows:
 
@@ -134,11 +154,18 @@ The app does not show a live-operator banner or modal alert for updates.
 
 ## Error Handling
 
-- Launch-time network errors are quiet.
-- Manual check errors are shown in About as `Could not check for updates.` with a short detail.
+- Launch-time failures of any category are quiet and return to `idle`.
+- Launch-time HTTP 404 from `/releases/latest/download/VERSION` is treated as "no stable release found" for diagnostics, but still returns to `idle` silently.
+- Manual check errors are shown in About as `Could not check for updates.` with a short detail:
+  - Network error: `Network unavailable or GitHub could not be reached.`
+  - HTTP 404: `No stable release was found.`
+  - Other HTTP status: `GitHub returned HTTP <status>.`
+  - Invalid remote version: `Release VERSION was not parseable.`
+  - Invalid local version: `Installed app version was not parseable.`
 - Malformed `VERSION` content is treated as a failed check.
 - If the installed bundle version cannot be read, the About window still opens and update checking reports a failed local-version state.
 - The app does not retry automatically after failure. The operator can press **Check for Updates** again.
+- GitHub's CDN may briefly serve a stale `/releases/latest/download/` redirect immediately after a release is published. The app treats that as a normal up-to-date or older-version result; a later manual check will observe the newer release once the redirect updates.
 
 ## Security And Safety
 
@@ -154,12 +181,16 @@ The app does not show a live-operator banner or modal alert for updates.
 Automated tests:
 
 - `SemanticVersion` parses valid `major.minor.patch` values.
+- `SemanticVersion` parses valid prerelease values such as `3.4.0-rc1`.
 - `SemanticVersion` rejects malformed values.
 - Numeric comparison handles cases such as `3.10.0 > 3.9.0`.
+- Prerelease comparison handles `3.4.0-rc1 < 3.4.0`.
 - `UpdateChecker` reports `upToDate` when current equals latest.
 - `UpdateChecker` reports `available` when latest is greater than current.
 - `UpdateChecker` reports `upToDate` when latest is older than current.
-- `UpdateChecker` reports `failed` on network errors and malformed remote version text.
+- `UpdateChecker` reports `available` when the installed version is a prerelease and the latest stable release has the same numeric core.
+- `UpdateChecker` reports `failed` on manual network errors, HTTP failures, malformed remote version text, and malformed local version text.
+- The launch-time check returns to `idle` instead of surfacing a failure when the network or release endpoint is unavailable.
 
 Manual verification:
 
@@ -176,6 +207,7 @@ Manual verification:
 - Do not introduce Sparkle or another updater framework in this design.
 - Do not parse GitHub JSON in the app; use the existing `VERSION` asset.
 - Keep network code behind a small protocol so tests can inject a fake fetcher.
+- Keep the install command and GitHub release URLs in named constants, not duplicated string literals.
 - Keep update state separate from transcription/session logic except for the read-only session-running wording.
 - Do not add live-session UI interruptions for update availability.
 
