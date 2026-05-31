@@ -125,4 +125,27 @@ if verify_sums "$sums_tmp" 2>/dev/null; then
 fi
 pass "verify_sums fails when SHA256SUMS missing"
 
+
+# ---- MANIFEST.profiles parsing ----
+
+man_tmp="$(mktemp -d -t man_test.XXXXXX)"
+trap 'rm -rf "$tmpdir" "$sums_tmp" "$man_tmp"' EXIT
+
+# No manifest: returns empty (no profiles ship)
+out="$(read_profile_manifest "$man_tmp")"
+[[ -z "$out" ]] || fail "missing manifest should produce empty output, got: $out"
+pass "read_profile_manifest returns empty when MANIFEST.profiles absent"
+
+# Manifest with two entries, blank lines and comments tolerated
+cat > "$man_tmp/MANIFEST.profiles" <<EOF
+default.streamDeckProfile
+
+# comment line, should be skipped
+ten-key.streamDeckProfile
+EOF
+out="$(read_profile_manifest "$man_tmp")"
+expected=$'default.streamDeckProfile\nten-key.streamDeckProfile'
+[[ "$out" == "$expected" ]] || fail "manifest parse mismatch: got '$out'"
+pass "read_profile_manifest returns one filename per line"
+
 echo "All install.sh tests passed."

@@ -92,6 +92,16 @@ verify_sums() {
   ( cd "$dir" && shasum -a 256 -c SHA256SUMS --status )
 }
 
+# Prints one profile filename per line, skipping blanks and #-comments.
+# Prints nothing (exit 0) when MANIFEST.profiles is absent — "no profiles ship".
+read_profile_manifest() {
+  local dir="$1"
+  local file="$dir/MANIFEST.profiles"
+  [[ -f "$file" ]] || return 0
+  # Strip CR (in case of CRLF), then drop blank lines and comments.
+  tr -d '\r' < "$file" | sed -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*#/d'
+}
+
 main() {
   parse_args "$@"
   log "EventSubtitles installer"
