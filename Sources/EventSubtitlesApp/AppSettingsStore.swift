@@ -36,6 +36,7 @@ struct AppSettings: Codable {
     var captionIdleFlushAfter: Double?
     var captionAutoClearAfter: Double?
     var selectedAudioInputDeviceID: String?
+    var selectedOutputDisplayID: String?
 }
 
 struct CodableColor: Codable {

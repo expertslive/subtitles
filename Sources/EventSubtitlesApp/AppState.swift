@@ -18,6 +18,13 @@ final class AppState {
             && abs(lhs.blueComponent - rhs.blueComponent) < tolerance
     }
 
+    static func screenID(for screen: NSScreen) -> String? {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return nil
+        }
+        return number.stringValue
+    }
+
     var mode: ProcessingMode = .subtitlesOnly {
         didSet {
             if mode != .subtitlesOnly {
@@ -35,6 +42,7 @@ final class AppState {
     var effectiveAudioInputDeviceID: String?
     var audioInputDescription = "Input unknown"
     var audioInputSelectionStatus = "Input unknown"
+    var lastAudibleInputAt: Date?
     var engineStatus = "Simulator idle"
     var errorMessage: String?
     var sessionName = "Main stage"
@@ -118,10 +126,17 @@ final class AppState {
     var keepMacAwakeDuringSession = true
     var sleepPreventionStatus = "Awake ready"
     var appMemoryUsageText = "Unknown"
+    var selectedOutputDisplayID: String?
+    var outputWindowVisible = false
+    var outputWindowFilled = false
+    var outputWindowDisplayID: String?
+    var isTestingAudio = false
+    var audioTestResult: AudioTestRecordingResult?
 
     @ObservationIgnored private let simulatorTranscriber = MockLocalTranscriber()
     @ObservationIgnored private let whisperKitTranscriber = WhisperKitTranscriber()
     @ObservationIgnored private let capturePipeline = AudioCapturePipeline()
+    @ObservationIgnored private let audioTestRecorder = AudioTestRecorder()
     @ObservationIgnored private let translator = RuleBasedTranslator()
     @ObservationIgnored private let commandLineTranslator = CommandLineTranslator()
     @ObservationIgnored private let sessionRecorder = SessionRecorder()
@@ -299,11 +314,289 @@ final class AppState {
         backgroundColor = .black
     }
 
+    func showOutputTestCard() {
+        unblankOutput()
+        let display = selectedOutputDisplay?.displayLabel ?? "Output"
+        publicCaptionText = "SUBTITLE TEST - \(display)"
+        recomputeCaption()
+    }
+
     func openSessionFolder() {
         guard let url = sessionRecorder.currentDirectoryURL else {
             return
         }
 
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func clearError() {
+        errorMessage = nil
+    }
+
+    func selectOutputDisplay(_ id: String?) {
+        selectedOutputDisplayID = id
+        saveSettings()
+    }
+
+    var outputDisplays: [OutputDisplayInfo] {
+        NSScreen.screens.enumerated().map { index, screen in
+            let frame = screen.frame
+            let id = Self.screenID(for: screen) ?? "screen-\(index)"
+            let name = screen.localizedName.isEmpty ? "Display \(index + 1)" : screen.localizedName
+            let resolution = "\(Int(frame.width)) x \(Int(frame.height))"
+            let scale = Double(screen.backingScaleFactor)
+                .formatted(.number.precision(.fractionLength(0...1)))
+            return OutputDisplayInfo(
+                id: id,
+                name: name,
+                frameDescription: "\(resolution) @ \(scale)x",
+                isMain: screen == NSScreen.main
+            )
+        }
+    }
+
+    var selectedOutputDisplay: OutputDisplayInfo? {
+        let displays = outputDisplays
+        if let selectedOutputDisplayID,
+           let display = displays.first(where: { $0.id == selectedOutputDisplayID }) {
+            return display
+        }
+        return displays.first { !$0.isMain } ?? displays.first
+    }
+
+    var outputStatusText: String {
+        if outputWindowFilled {
+            return "Filled \(selectedOutputDisplay?.displayLabel ?? "display")"
+        }
+        if outputWindowVisible {
+            return "Window visible"
+        }
+        return "Output not visible"
+    }
+
+    var preflightChecks: [PreflightCheck] {
+        [
+            audioPreflightCheck,
+            audioSignalPreflightCheck,
+            modelPreflightCheck,
+            outputPreflightCheck,
+            displayPreflightCheck,
+            sessionFolderPreflightCheck,
+            sleepPreflightCheck,
+            translationPreflightCheck,
+            glossaryPreflightCheck
+        ]
+    }
+
+    var preflightSummaryStatus: OperationalStatus {
+        preflightChecks.map(\.status).max() ?? .pass
+    }
+
+    var preflightSummaryText: String {
+        let failed = preflightChecks.filter { $0.status == .fail }.count
+        let warnings = preflightChecks.filter { $0.status == .warning }.count
+        if failed > 0 {
+            return "\(failed) blocked, \(warnings) check"
+        }
+        if warnings > 0 {
+            return "\(warnings) check"
+        }
+        return "Ready"
+    }
+
+    private var audioPreflightCheck: PreflightCheck {
+        if audioInputDevices.isEmpty || audioInputSelectionStatus == "No input device available" {
+            return PreflightCheck(
+                id: "audio-input",
+                title: "Audio input",
+                detail: "No input device is available.",
+                status: .fail,
+                actionTitle: "Open Audio",
+                action: { [weak self] in self?.selectedWorkspace = .audio }
+            )
+        }
+
+        let status: OperationalStatus = audioInputSelectionStatus.contains("unavailable") ? .warning : .pass
+        return PreflightCheck(
+            id: "audio-input",
+            title: "Audio input",
+            detail: "\(audioInputDescription) - \(audioInputSelectionStatus)",
+            status: status,
+            actionTitle: "Open Audio",
+            action: { [weak self] in self?.selectedWorkspace = .audio }
+        )
+    }
+
+    private var audioSignalPreflightCheck: PreflightCheck {
+        let heardRecently = lastAudibleInputAt.map { Date().timeIntervalSince($0) < 10 } ?? false
+        let hasSignal = audioLevel > 0.05 || heardRecently
+        return PreflightCheck(
+            id: "audio-signal",
+            title: "Audio signal",
+            detail: hasSignal ? "Input signal detected." : "No recent signal. Speak into the stage mic or run a test.",
+            status: hasSignal || transcriptionEngine == .simulator ? .pass : .warning,
+            actionTitle: "Test",
+            action: { [weak self] in self?.selectedWorkspace = .audio }
+        )
+    }
+
+    private var modelPreflightCheck: PreflightCheck {
+        guard transcriptionEngine == .whisperKit else {
+            return PreflightCheck(
+                id: "model",
+                title: "Model",
+                detail: "\(transcriptionEngine.label) does not require a Whisper model.",
+                status: .pass
+            )
+        }
+
+        let prepared = modelStatus.localizedCaseInsensitiveContains("prepared")
+            && modelStatus.localizedCaseInsensitiveContains(whisperModelName)
+        return PreflightCheck(
+            id: "model",
+            title: "Whisper model",
+            detail: prepared ? modelStatus : "Selected model is not prepared for offline use.",
+            status: prepared ? .pass : .fail,
+            actionTitle: "Open Models",
+            action: { [weak self] in self?.selectedWorkspace = .models }
+        )
+    }
+
+    private var outputPreflightCheck: PreflightCheck {
+        PreflightCheck(
+            id: "output-window",
+            title: "Output window",
+            detail: outputStatusText,
+            status: outputWindowVisible ? .pass : .warning,
+            actionTitle: outputWindowVisible ? "Open Output" : "Show",
+            action: { [weak self] in
+                guard let self else { return }
+                if self.outputWindowVisible {
+                    self.selectedWorkspace = .output
+                } else {
+                    self.showOutputWindow()
+                }
+            }
+        )
+    }
+
+    private var displayPreflightCheck: PreflightCheck {
+        let displays = outputDisplays
+        let hasExternal = displays.contains { !$0.isMain }
+        let selectedMissing = selectedOutputDisplayID != nil
+            && !displays.contains { $0.id == selectedOutputDisplayID }
+        let status: OperationalStatus = selectedMissing ? .warning : (hasExternal ? .pass : .warning)
+        let detail: String
+        if selectedMissing {
+            detail = "The selected output display is no longer connected."
+        } else if hasExternal {
+            detail = "External display detected."
+        } else {
+            detail = "Only the main display is connected."
+        }
+        return PreflightCheck(
+            id: "display",
+            title: "Display",
+            detail: detail,
+            status: status,
+            actionTitle: "Open Output",
+            action: { [weak self] in self?.selectedWorkspace = .output }
+        )
+    }
+
+    private var sessionFolderPreflightCheck: PreflightCheck {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        let writable = documents.map { FileManager.default.isWritableFile(atPath: $0.path) } ?? false
+        return PreflightCheck(
+            id: "session-folder",
+            title: "Session folder",
+            detail: writable ? "Documents folder is writable." : "Documents folder is not writable.",
+            status: writable ? .pass : .fail,
+            actionTitle: "Open Logs",
+            action: { [weak self] in self?.selectedWorkspace = .logs }
+        )
+    }
+
+    private var sleepPreflightCheck: PreflightCheck {
+        PreflightCheck(
+            id: "sleep",
+            title: "Power",
+            detail: sleepPreventionStatus,
+            status: sleepPreventionStatus == "Awake failed" ? .warning : .pass,
+            actionTitle: "Open Audio",
+            action: { [weak self] in self?.selectedWorkspace = .audio }
+        )
+    }
+
+    private var translationPreflightCheck: PreflightCheck {
+        guard mode != .subtitlesOnly, translationEngine == .localCommand else {
+            return PreflightCheck(
+                id: "translation",
+                title: "Translation",
+                detail: mode == .subtitlesOnly ? "Translation is off." : "\(translationEngine.label) is selected.",
+                status: .pass
+            )
+        }
+
+        let path = translationCommandPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let executable = !path.isEmpty && FileManager.default.isExecutableFile(atPath: path)
+        return PreflightCheck(
+            id: "translation",
+            title: "Translation command",
+            detail: executable ? "Local command is executable." : "Local command path is missing or not executable.",
+            status: executable ? .pass : .fail,
+            actionTitle: "Open Translation",
+            action: { [weak self] in self?.selectedWorkspace = .translation }
+        )
+    }
+
+    private var glossaryPreflightCheck: PreflightCheck {
+        let termCount = glossaryText
+            .split(whereSeparator: \.isNewline)
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+            }
+            .count
+        return PreflightCheck(
+            id: "glossary",
+            title: "Glossary",
+            detail: termCount == 0 ? "No glossary terms loaded." : "\(termCount) terms loaded.",
+            status: termCount == 0 ? .warning : .pass,
+            actionTitle: "Open Glossary",
+            action: { [weak self] in self?.selectedWorkspace = .glossary }
+        )
+    }
+
+    func outputWindowDidUpdate(isVisible: Bool, isFilled: Bool, displayID: String?) {
+        outputWindowVisible = isVisible
+        outputWindowFilled = isFilled
+        outputWindowDisplayID = displayID
+    }
+
+    func runAudioTestRecording() {
+        guard !isRunning, !isStarting, !isTestingAudio else { return }
+        isTestingAudio = true
+        audioTestResult = nil
+        errorMessage = nil
+
+        let input = selectedAudioInputDeviceForCapture()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.audioTestRecorder.record(inputDeviceID: input, duration: 5)
+                self.audioTestResult = result
+                self.sessionLogger.info("Audio test recording saved: \(result.url.path)")
+            } catch {
+                self.errorMessage = "Audio test recording failed: \(error.localizedDescription)"
+                self.sessionLogger.error("Audio test recording failed: \(error.localizedDescription)")
+            }
+            self.isTestingAudio = false
+        }
+    }
+
+    func revealAudioTestRecording() {
+        guard let url = audioTestResult?.url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
@@ -381,6 +674,9 @@ final class AppState {
         guard now.timeIntervalSince(lastAudioLevelPublishedAt) >= 1.0 / 60.0 else { return }
         lastAudioLevelPublishedAt = now
         audioLevel = level
+        if level > 0.05 {
+            lastAudibleInputAt = now
+        }
     }
 
     var systemMemoryText: String {
@@ -524,7 +820,8 @@ final class AppState {
             captionLineMinHold: captionLineMinHold,
             captionIdleFlushAfter: captionIdleFlushAfter,
             captionAutoClearAfter: captionAutoClearAfter,
-            selectedAudioInputDeviceID: selectedAudioInputDeviceID
+            selectedAudioInputDeviceID: selectedAudioInputDeviceID,
+            selectedOutputDisplayID: selectedOutputDisplayID
         )
     }
 
@@ -610,6 +907,7 @@ final class AppState {
         captionIdleFlushAfter = settings.captionIdleFlushAfter ?? 1.5
         captionAutoClearAfter = settings.captionAutoClearAfter ?? 5.0
         selectedAudioInputDeviceID = settings.selectedAudioInputDeviceID
+        selectedOutputDisplayID = settings.selectedOutputDisplayID
     }
 
     private func audioInputStatusText(for result: AudioInputSelectionResult) -> String {

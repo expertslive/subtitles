@@ -65,9 +65,35 @@ struct AudioWorkspace: View {
 
                 WorkspaceSection(title: "Test recording") {
                     Button {
-                        state.errorMessage = "Test recording not implemented yet."
+                        state.runAudioTestRecording()
                     } label: {
-                        Label("Run test recording", systemImage: "record.circle")
+                        Label(state.isTestingAudio ? "Recording 5s test" : "Record 5s test", systemImage: "record.circle")
+                    }
+                    .disabled(state.isRunning || state.isStarting || state.isTestingAudio)
+
+                    if state.isTestingAudio {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    if let result = state.audioTestResult {
+                        Divider()
+                        Label(result.summary, systemImage: result.clipped || result.silent ? "exclamationmark.triangle" : "checkmark.circle")
+                            .foregroundStyle(result.clipped || result.silent ? .orange : .green)
+                        LabeledContent("Duration", value: result.durationText)
+                        LabeledContent("Peak", value: result.peakText)
+                        LabeledContent("Clipping", value: result.clipped ? "Yes" : "No")
+                        LabeledContent("Silence", value: result.silent ? "Yes" : "No")
+                        Text(result.url.path)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                        Button {
+                            state.revealAudioTestRecording()
+                        } label: {
+                            Label("Reveal file", systemImage: "finder")
+                        }
                     }
                 }
                 .frame(maxWidth: 680)

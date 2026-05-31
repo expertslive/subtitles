@@ -67,6 +67,77 @@ struct StatusPill: View {
     }
 }
 
+struct PreflightSummaryCard: View {
+    let checks: [PreflightCheck]
+
+    private var status: OperationalStatus {
+        checks.map(\.status).max() ?? .pass
+    }
+
+    private var summaryText: String {
+        let failed = checks.filter { $0.status == .fail }.count
+        let warnings = checks.filter { $0.status == .warning }.count
+        if failed > 0 {
+            return "\(failed) blocked, \(warnings) check"
+        }
+        if warnings > 0 {
+            return "\(warnings) check"
+        }
+        return "Ready"
+    }
+
+    var body: some View {
+        WorkspaceSection(title: "Preflight") {
+            HStack(spacing: 10) {
+                Label(summaryText, systemImage: status.systemImage)
+                    .foregroundStyle(status.tint)
+                    .font(.headline)
+                Spacer()
+            }
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(checks) { check in
+                        PreflightCheckRow(check: check)
+                    }
+                }
+                .padding(.trailing, 4)
+            }
+            .frame(maxHeight: 270)
+            .clipped()
+        }
+    }
+}
+
+private struct PreflightCheckRow: View {
+    let check: PreflightCheck
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: check.status.systemImage)
+                .foregroundStyle(check.status.tint)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(check.title)
+                    .font(.caption.weight(.semibold))
+                Text(check.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            if let actionTitle = check.actionTitle, let action = check.action {
+                Button(actionTitle, action: action)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 struct SliderRow: View {
     let title: String
     @Binding var value: Double
