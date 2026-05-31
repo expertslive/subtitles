@@ -4,6 +4,22 @@ A native macOS app, displayed as `Subtitles`, for offline live subtitles and Dut
 
 ![Subtitles operator interface](docs/subtitles.png)
 
+## Install on an event Mac
+
+One-liner — downloads the latest release, verifies SHA-256 sums, and installs `EventSubtitles.app` plus the Stream Deck plugin:
+
+```bash
+curl -fsSL https://github.com/expertslive/subtitles/releases/latest/download/install.sh | bash
+```
+
+Pin a specific version:
+
+```bash
+curl -fsSL https://github.com/expertslive/subtitles/releases/download/vX.Y.Z/install.sh | bash -s -- --version vX.Y.Z
+```
+
+Prerequisites: macOS 14+, Apple silicon, [Elgato Stream Deck](https://www.elgato.com/downloads) installed. See [`docs/install.md`](docs/install.md) for flags (`--dry-run`, `--reinstall`), the one-time right-click-Open step, and Stream Deck profile import.
+
 ## Documentation
 
 Start with the documentation index in [docs/README.md](docs/README.md).
@@ -74,17 +90,6 @@ Each session folder contains:
 - `input-audio.caf`
 
 `source-transcript.txt` is the spoken-word transcript. `display-transcript.txt` is what was shown on screen after glossary correction and optional translation. `source.srt` and `display.srt` are regenerated after every final segment with approximate timings. `draft.srt` mirrors the display SRT for quick review.
-
-## Installation
-
-To install `EventSubtitles` and its Stream Deck plugin on an event Mac:
-
-```bash
-curl -fsSL https://github.com/expertslive/subtitles/releases/latest/download/install.sh | bash
-```
-
-See [`docs/install.md`](docs/install.md) for prerequisites, flags, and the
-post-install steps.
 
 ## Model Plan
 
