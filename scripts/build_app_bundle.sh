@@ -23,42 +23,7 @@ else
     swift -module-cache-path "$ROOT_DIR/build/ModuleCache" "$ROOT_DIR/scripts/generate_app_icon.swift" "$RESOURCES_DIR/AppIcon.icns"
 fi
 
-cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleDisplayName</key>
-    <string>Subtitles</string>
-    <key>CFBundleExecutable</key>
-    <string>EventSubtitles</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.eventsubtitles.app</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Subtitles</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>3.3.0</string>
-    <key>CFBundleVersion</key>
-    <string>8</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>EventSubtitles needs audio input access to transcribe and record stage audio locally.</string>
-    <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>
-</dict>
-</plist>
-PLIST
+"$ROOT_DIR/scripts/write_info_plist.sh" "$CONTENTS_DIR/Info.plist"
 
 codesign --force --deep --sign - "$APP_DIR" >/dev/null
 
