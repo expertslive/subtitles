@@ -155,6 +155,60 @@ private func testCaptionLineFitterIncludesOversizedSingleLine() -> Bool {
     return expectEqual(picked, ["huge wraps to four"], "oversized newest line included alone")
 }
 
+private func testSemanticVersionParsesStableVersion() -> Bool {
+    guard let version = SemanticVersion("3.4.0") else {
+        fputs("FAIL: stable semantic version should parse\n", stderr)
+        return false
+    }
+    return expectEqual(version.major, 3, "semantic major") &&
+        expectEqual(version.minor, 4, "semantic minor") &&
+        expectEqual(version.patch, 0, "semantic patch") &&
+        expectEqual(version.prerelease, nil, "semantic prerelease")
+}
+
+private func testSemanticVersionParsesPrereleaseVersion() -> Bool {
+    guard let version = SemanticVersion("3.4.0-rc1") else {
+        fputs("FAIL: prerelease semantic version should parse\n", stderr)
+        return false
+    }
+    return expectEqual(version.major, 3, "prerelease semantic major") &&
+        expectEqual(version.minor, 4, "prerelease semantic minor") &&
+        expectEqual(version.patch, 0, "prerelease semantic patch") &&
+        expectEqual(version.prerelease, "rc1", "semantic prerelease suffix")
+}
+
+private func testSemanticVersionRejectsMalformedVersions() -> Bool {
+    let values = ["", "3", "3.4", "3.4.x", "v3.4.0", "3.4.0-", "3.4.0+build", "3.4.0 rc1"]
+    return values.allSatisfy { value in
+        if SemanticVersion(value) == nil {
+            return true
+        }
+        fputs("FAIL: malformed semantic version should be rejected: \(value)\n", stderr)
+        return false
+    }
+}
+
+private func testSemanticVersionComparesNumerically() -> Bool {
+    guard let low = SemanticVersion("3.9.0"),
+          let high = SemanticVersion("3.10.0"),
+          let patch = SemanticVersion("3.10.1") else {
+        fputs("FAIL: comparison semantic versions should parse\n", stderr)
+        return false
+    }
+    return expectEqual(high > low, true, "minor comparison should be numeric") &&
+        expectEqual(patch > high, true, "patch comparison should be numeric")
+}
+
+private func testSemanticVersionSortsPrereleaseBeforeStable() -> Bool {
+    guard let prerelease = SemanticVersion("3.4.0-rc1"),
+          let stable = SemanticVersion("3.4.0") else {
+        fputs("FAIL: prerelease comparison semantic versions should parse\n", stderr)
+        return false
+    }
+    return expectEqual(prerelease < stable, true, "prerelease sorts before stable") &&
+        expectEqual(stable > prerelease, true, "stable sorts after prerelease")
+}
+
 private func readSource(_ relativePath: String) -> String? {
     let sourceURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         .appendingPathComponent(relativePath)
@@ -569,6 +623,11 @@ let tests = [
     ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil),
     ("captionLineFitterPicksNewestThatFit", testCaptionLineFitterPicksNewestThatFit),
     ("captionLineFitterIncludesOversizedSingleLine", testCaptionLineFitterIncludesOversizedSingleLine),
+    ("semanticVersionParsesStableVersion", testSemanticVersionParsesStableVersion),
+    ("semanticVersionParsesPrereleaseVersion", testSemanticVersionParsesPrereleaseVersion),
+    ("semanticVersionRejectsMalformedVersions", testSemanticVersionRejectsMalformedVersions),
+    ("semanticVersionComparesNumerically", testSemanticVersionComparesNumerically),
+    ("semanticVersionSortsPrereleaseBeforeStable", testSemanticVersionSortsPrereleaseBeforeStable),
     ("appStateStartOnlyRunsSessionAfterCaptureSucceeds", testAppStateStartOnlyRunsSessionAfterCaptureSucceeds),
     ("appStateCanceledStartDoesNotRecordFailure", testAppStateCanceledStartDoesNotRecordFailure),
     ("appStateScopesCaptureCompletionToStartupAttempt", testAppStateScopesCaptureCompletionToStartupAttempt),
