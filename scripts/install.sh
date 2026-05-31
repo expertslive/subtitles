@@ -80,6 +80,18 @@ is_already_installed() {
   [[ -n "$have" && "$have" == "$want" ]]
 }
 
+# Verifies every payload file in $1 against $1/SHA256SUMS.
+# Aborts (non-zero) on any mismatch or if SHA256SUMS is missing.
+verify_sums() {
+  local dir="$1"
+  local sumfile="$dir/SHA256SUMS"
+  if [[ ! -f "$sumfile" ]]; then
+    err "SHA256SUMS not found at $sumfile"
+    return 1
+  fi
+  ( cd "$dir" && shasum -a 256 -c SHA256SUMS --status )
+}
+
 main() {
   parse_args "$@"
   log "EventSubtitles installer"

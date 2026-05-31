@@ -95,4 +95,34 @@ APPS_DIR="$tmpdir/v2" is_already_installed "3.4.0" \
   || fail "should report installed when versions match"
 pass "is_already_installed returns true on version match"
 
+
+# ---- SHA verification ----
+
+sums_tmp="$(mktemp -d -t sums_test.XXXXXX)"
+trap 'rm -rf "$tmpdir" "$sums_tmp"' EXIT
+
+# Build a valid SHA256SUMS file matching three payload files
+printf 'aaa' > "$sums_tmp/a.txt"
+printf 'bbbb' > "$sums_tmp/b.txt"
+printf 'cc'   > "$sums_tmp/c.txt"
+( cd "$sums_tmp" && shasum -a 256 a.txt b.txt c.txt > SHA256SUMS )
+
+verify_sums "$sums_tmp" || fail "verify_sums should accept matching payload"
+pass "verify_sums passes on intact payload"
+
+# Corrupt one file
+printf 'corrupted' > "$sums_tmp/b.txt"
+if verify_sums "$sums_tmp" 2>/dev/null; then
+  fail "verify_sums should reject corrupted payload"
+fi
+pass "verify_sums fails on corrupted payload"
+
+# Restore and remove SHA256SUMS to check the "missing sums file" path
+printf 'bbbb' > "$sums_tmp/b.txt"
+rm "$sums_tmp/SHA256SUMS"
+if verify_sums "$sums_tmp" 2>/dev/null; then
+  fail "verify_sums should error when SHA256SUMS missing"
+fi
+pass "verify_sums fails when SHA256SUMS missing"
+
 echo "All install.sh tests passed."
