@@ -58,6 +58,16 @@ parse_args() {
   done
 }
 
+resolve_base_url() {
+  if [[ -n "$OPT_VERSION" ]]; then
+    printf 'https://github.com/%s/%s/releases/download/%s/' \
+      "$REPO_OWNER" "$REPO_NAME" "$OPT_VERSION"
+  else
+    printf 'https://github.com/%s/%s/releases/latest/download/' \
+      "$REPO_OWNER" "$REPO_NAME"
+  fi
+}
+
 main() {
   parse_args "$@"
   log "EventSubtitles installer"
