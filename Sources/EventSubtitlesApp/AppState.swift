@@ -419,11 +419,19 @@ final class AppState {
     }
 
     func toggleOutputBlank() {
-        outputBlanked.toggle()
+        if outputBlanked {
+            unblankOutput()
+        } else {
+            panicBlank()
+        }
     }
 
     func unblankOutput() {
         outputBlanked = false
+        // Resume from live audio rather than draining whatever piled up while
+        // hidden. Without this reset, the scheduler/roller backlog accumulated
+        // during the blank would rush down once the output reappears.
+        resetCaptionDisplayPipeline(clearOutput: true)
     }
 
     func showOutputWindow() {
@@ -1650,6 +1658,23 @@ final class AppState {
         self.draftEvent = draftEvent
         lastDetectedLanguageForDisplay = detectedLanguage ?? sourceLanguage
 
+        if outputBlanked {
+            // Panic blank hides the output. Don't feed the live display pipeline
+            // while hidden — that would build a backlog that drains stale once
+            // unblanked. Still record finals so the transcript history and
+            // session log stay complete.
+            if isFinal {
+                await recordTranscriptWhileBlanked(
+                    draftSource,
+                    detectedLanguage: detectedLanguage,
+                    startedAt: startedAt,
+                    endedAt: endedAt,
+                    corrector: corrector
+                )
+            }
+            return
+        }
+
         if captionDisplayMode == .fastDraft {
             await publishFastDraft(
                 draftSource,
@@ -1951,6 +1976,28 @@ final class AppState {
             sessionLogStatus = "Save failed"
             errorMessage = "Session log save failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Records a final transcript to history/session log without touching the
+    /// live display pipeline. Used while the output is panic-blanked so the log
+    /// stays complete even though nothing is shown to the audience.
+    private func recordTranscriptWhileBlanked(
+        _ source: String,
+        detectedLanguage: SourceLanguage?,
+        startedAt: Date?,
+        endedAt: Date?,
+        corrector: GlossaryCorrector
+    ) async {
+        let translated = await translate(source, isFinal: true)
+        let display = corrector.apply(to: translated)
+        let event = TranscriptEvent(
+            sourceText: source,
+            displayText: display,
+            isFinal: true,
+            startedAt: startedAt,
+            endedAt: endedAt
+        )
+        recordDisplayedEvent(event, detectedLanguage: detectedLanguage)
     }
 
     private func resetCaptionDisplayPipeline(clearOutput: Bool) {
