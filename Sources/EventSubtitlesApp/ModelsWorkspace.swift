@@ -1,3 +1,4 @@
+import EventSubtitlesCore
 import SwiftUI
 
 struct ModelsWorkspace: View {
@@ -12,7 +13,10 @@ struct ModelsWorkspace: View {
                 Group {
                     if useColumns {
                         HStack(alignment: .top, spacing: 18) {
-                            modelSetupPanel
+                            VStack(alignment: .leading, spacing: 16) {
+                                modelSetupPanel
+                                advancedWhisperPanel
+                            }
                                 .frame(maxWidth: .infinity)
 
                             modelSideColumn
@@ -21,6 +25,7 @@ struct ModelsWorkspace: View {
                     } else {
                         VStack(alignment: .leading, spacing: 16) {
                             modelSetupPanel
+                            advancedWhisperPanel
                             modelSideColumn
                         }
                     }
@@ -144,5 +149,91 @@ struct ModelsWorkspace: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var advancedWhisperPanel: some View {
+        WorkspaceSection(title: "Advanced Whisper") {
+            VStack(alignment: .leading, spacing: 12) {
+                SliderRow(
+                    title: "Temperature",
+                    value: whisperDoubleBinding(\.temperature),
+                    range: 0...0.8,
+                    step: 0.1,
+                    fractionLength: 1
+                )
+
+                Stepper(
+                    "Fallback count: \(state.whisperDecodeSettings.temperatureFallbackCount)",
+                    value: whisperIntBinding(\.temperatureFallbackCount),
+                    in: 0...3,
+                    step: 1
+                )
+
+                SliderRow(
+                    title: "Fallback increment",
+                    value: whisperDoubleBinding(\.temperatureFallbackIncrement),
+                    range: 0...0.3,
+                    step: 0.1,
+                    fractionLength: 1
+                )
+
+                SliderRow(
+                    title: "Live decode window",
+                    value: whisperDoubleBinding(\.liveDecodeWindowSeconds),
+                    range: 6...20,
+                    step: 1,
+                    unit: "s",
+                    fractionLength: 0
+                )
+
+                SliderRow(
+                    title: "Minimum new audio",
+                    value: whisperDoubleBinding(\.minimumDecodeAudioSeconds),
+                    range: 1...4,
+                    step: 0.5,
+                    unit: "s",
+                    fractionLength: 1
+                )
+
+                Button {
+                    state.resetWhisperDecodeSettings()
+                } label: {
+                    Label("Reset event-safe defaults", systemImage: "arrow.counterclockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+
+                Text("Changes apply to the next live decode pass.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func whisperDoubleBinding(_ keyPath: WritableKeyPath<WhisperDecodeSettings, Double>) -> Binding<Double> {
+        Binding(
+            get: { state.whisperDecodeSettings[keyPath: keyPath] },
+            set: { value in
+                state.updateWhisperDecodeSettings { settings in
+                    var copy = settings
+                    copy[keyPath: keyPath] = value
+                    return copy
+                }
+            }
+        )
+    }
+
+    private func whisperIntBinding(_ keyPath: WritableKeyPath<WhisperDecodeSettings, Int>) -> Binding<Int> {
+        Binding(
+            get: { state.whisperDecodeSettings[keyPath: keyPath] },
+            set: { value in
+                state.updateWhisperDecodeSettings { settings in
+                    var copy = settings
+                    copy[keyPath: keyPath] = value
+                    return copy
+                }
+            }
+        )
     }
 }

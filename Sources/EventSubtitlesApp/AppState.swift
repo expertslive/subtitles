@@ -53,6 +53,11 @@ final class AppState {
     var selectedWorkspace: OperatorWorkspace = .live
     var transcriptionEngine: TranscriptionEngineChoice = .simulator
     var whisperModelName = "large-v3-v20240930_626MB"
+    var whisperDecodeSettings = WhisperDecodeSettings.eventSafeDefaults {
+        didSet {
+            whisperKitTranscriber.setDecodeSettings(whisperDecodeSettings)
+        }
+    }
     var modelStatus = "Not prepared"
     var isPreparingModel = false
     var translationEngine: TranslationEngineChoice = .ruleBased
@@ -396,6 +401,16 @@ final class AppState {
 
     func clearCaptions() {
         resetCaptionDisplayPipeline(clearOutput: true)
+    }
+
+    func updateWhisperDecodeSettings(_ transform: (WhisperDecodeSettings) -> WhisperDecodeSettings) {
+        whisperDecodeSettings = transform(whisperDecodeSettings).clamped()
+        saveSettings()
+    }
+
+    func resetWhisperDecodeSettings() {
+        whisperDecodeSettings = .eventSafeDefaults
+        saveSettings()
     }
 
     func panicBlank() {
@@ -988,6 +1003,7 @@ final class AppState {
             translationEngine: translationEngine.rawValue,
             sessionName: sessionName,
             whisperModelName: whisperModelName,
+            whisperDecodeSettings: whisperDecodeSettings,
             translationCommandPath: translationCommandPath,
             translationCommandArguments: translationCommandArguments,
             glossaryText: glossaryText,
@@ -1074,6 +1090,7 @@ final class AppState {
         translationEngine = TranslationEngineChoice(rawValue: settings.translationEngine) ?? .ruleBased
         sessionName = settings.sessionName
         whisperModelName = settings.whisperModelName
+        whisperDecodeSettings = (settings.whisperDecodeSettings ?? .eventSafeDefaults).clamped()
         translationCommandPath = settings.translationCommandPath
         translationCommandArguments = settings.translationCommandArguments
         glossaryText = settings.glossaryText
@@ -1536,7 +1553,8 @@ final class AppState {
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
                             glossary: self.glossaryText,
-                            sessionName: self.sessionName
+                            sessionName: self.sessionName,
+                            whisperDecodeSettings: self.whisperDecodeSettings
                         )
                     ) { [weak self] result in
                         Task { @MainActor [weak self] in
@@ -1556,7 +1574,8 @@ final class AppState {
                         configuration: SpeechEngineConfiguration(
                             sourceLanguage: self.sourceLanguage,
                             glossary: self.glossaryText,
-                            sessionName: self.sessionName
+                            sessionName: self.sessionName,
+                            whisperDecodeSettings: self.whisperDecodeSettings
                         )
                     ) { [weak self] result in
                         Task { @MainActor [weak self] in
