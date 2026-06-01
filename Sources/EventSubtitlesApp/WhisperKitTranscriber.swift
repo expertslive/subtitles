@@ -4,6 +4,7 @@ import Foundation
 @preconcurrency import WhisperKit
 
 final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
+    private let settingsLock = NSLock()
     private var whisperKit: WhisperKit?
     private var streamProcessor: StreamFedAudioProcessor?
     private var streamTranscribeTask: TranscribeTask?
@@ -18,8 +19,7 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     private let requiredSegmentsForConfirmation = 0
     private let silenceThreshold: Float = 0.25
     private let compressionCheckWindow = 60
-    private let minimumDecodeAudioSeconds: Float = 2
-    private let maximumLiveDecodeWindowSeconds: Float = 12
+    private var decodeSettings = WhisperDecodeSettings.eventSafeDefaults
 
     init(modelName: String = "large-v3-v20240930_626MB", maximumRetainedAudioSeconds: TimeInterval = 30) {
         self.modelName = modelName
@@ -28,6 +28,12 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
     func setModelName(_ modelName: String) {
         self.modelName = modelName
+    }
+
+    func setDecodeSettings(_ settings: WhisperDecodeSettings) {
+        settingsLock.lock()
+        decodeSettings = settings
+        settingsLock.unlock()
     }
 
     func prepareModel() async throws {
@@ -55,6 +61,7 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
         lastConfirmedSegmentEndSeconds = 0
         lastPartialText = ""
         streamStartedAt = Date()
+        setDecodeSettings(configuration.whisperDecodeSettings)
 
         let kit: WhisperKit
         if let preparedKit = whisperKit, loadedModelName == modelName {
@@ -80,21 +87,7 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             glossary: configuration.glossary
         )
 
-        let decodeOptions = DecodingOptions(
-            verbose: false,
-            task: .transcribe,
-            language: whisperLanguageCode(for: configuration.sourceLanguage),
-            temperature: 0.0,
-            temperatureIncrementOnFallback: 0.0,
-            temperatureFallbackCount: 0,
-            usePrefillPrompt: true,
-            detectLanguage: configuration.sourceLanguage == .automatic,
-            skipSpecialTokens: true,
-            withoutTimestamps: false,
-            wordTimestamps: false,
-            promptTokens: nil,
-            chunkingStrategy: .vad
-        )
+        let detectLanguage = configuration.sourceLanguage == .automatic
 
         let processor = StreamFedAudioProcessor(maximumRetainedSeconds: maximumRetainedAudioSeconds)
         self.streamProcessor = processor
@@ -119,7 +112,8 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             await self.runRealtimeLoop(
                 processor: processor,
                 transcribeTask: transcribeTask,
-                decodeOptions: decodeOptions,
+                configuredLanguageCode: self.whisperLanguageCode(for: configuration.sourceLanguage),
+                detectLanguage: detectLanguage,
                 configuredLanguage: configuration.sourceLanguage,
                 onResult: onResult
             )
@@ -160,7 +154,8 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     private func runRealtimeLoop(
         processor: StreamFedAudioProcessor,
         transcribeTask: TranscribeTask,
-        decodeOptions: DecodingOptions,
+        configuredLanguageCode: String?,
+        detectLanguage: Bool,
         configuredLanguage: SourceLanguage,
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) async {
@@ -169,7 +164,8 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
                 try await transcribeCurrentBuffer(
                     processor: processor,
                     transcribeTask: transcribeTask,
-                    decodeOptions: decodeOptions,
+                    configuredLanguageCode: configuredLanguageCode,
+                    detectLanguage: detectLanguage,
                     configuredLanguage: configuredLanguage,
                     onResult: onResult
                 )
@@ -184,10 +180,14 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
     private func transcribeCurrentBuffer(
         processor: StreamFedAudioProcessor,
         transcribeTask: TranscribeTask,
-        decodeOptions: DecodingOptions,
+        configuredLanguageCode: String?,
+        detectLanguage: Bool,
         configuredLanguage: SourceLanguage,
         onResult: @escaping @Sendable (SpeechRecognitionResult) -> Void
     ) async throws {
+        let settings = currentDecodeSettings()
+        let minimumDecodeAudioSeconds = Float(settings.minimumDecodeAudioSeconds)
+        let maximumLiveDecodeWindowSeconds = Float(settings.liveDecodeWindowSeconds)
         let snapshot = processor.snapshot()
         let nextBufferSize = snapshot.totalSampleCount - lastProcessedTotalSampleCount
         let nextBufferSeconds = Float(nextBufferSize) / Float(WhisperKit.sampleRate)
@@ -209,7 +209,11 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
 
         lastProcessedTotalSampleCount = snapshot.totalSampleCount
 
-        var options = decodeOptions
+        var options = decodeOptions(
+            settings: settings,
+            languageCode: configuredLanguageCode,
+            detectLanguage: detectLanguage
+        )
         let snapshotDurationSeconds = Float(snapshot.samples.count) / Float(WhisperKit.sampleRate)
         let confirmedClipTimestamp = max(0, lastConfirmedSegmentEndSeconds - Float(snapshot.streamOffsetSeconds))
         let recentWindowStart = max(0, snapshotDurationSeconds - maximumLiveDecodeWindowSeconds)
@@ -227,6 +231,34 @@ final class WhisperKitTranscriber: SpeechTranscribing, @unchecked Sendable {
             absoluteSegments,
             configuredLanguage: configuredLanguage,
             onResult: onResult
+        )
+    }
+
+    private func currentDecodeSettings() -> WhisperDecodeSettings {
+        settingsLock.lock()
+        defer { settingsLock.unlock() }
+        return decodeSettings
+    }
+
+    private func decodeOptions(
+        settings: WhisperDecodeSettings,
+        languageCode: String?,
+        detectLanguage: Bool
+    ) -> DecodingOptions {
+        DecodingOptions(
+            verbose: false,
+            task: .transcribe,
+            language: languageCode,
+            temperature: Float(settings.temperature),
+            temperatureIncrementOnFallback: Float(settings.temperatureFallbackIncrement),
+            temperatureFallbackCount: settings.temperatureFallbackCount,
+            usePrefillPrompt: true,
+            detectLanguage: detectLanguage,
+            skipSpecialTokens: true,
+            withoutTimestamps: false,
+            wordTimestamps: false,
+            promptTokens: nil,
+            chunkingStrategy: .vad
         )
     }
 

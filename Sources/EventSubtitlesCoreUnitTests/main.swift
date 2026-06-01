@@ -86,6 +86,32 @@ func testPromptBuilderTruncatesAtCharacterLimit() -> Bool {
     return expectEqual(prompt.count, 100, "prompt should be truncated to maxCharacters")
 }
 
+func testWhisperDecodeSettingsClampToEventSafeRanges() -> Bool {
+    let settings = WhisperDecodeSettings(
+        temperature: 2,
+        temperatureFallbackCount: 9,
+        temperatureFallbackIncrement: 1,
+        liveDecodeWindowSeconds: 60,
+        minimumDecodeAudioSeconds: 0.1
+    )
+
+    return expectEqual(settings.temperature, 0.8, "temperature clamps to event-safe max") &&
+        expectEqual(settings.temperatureFallbackCount, 3, "fallback count clamps to event-safe max") &&
+        expectEqual(settings.temperatureFallbackIncrement, 0.3, "fallback increment clamps to event-safe max") &&
+        expectEqual(settings.liveDecodeWindowSeconds, 20, "live decode window clamps to event-safe max") &&
+        expectEqual(settings.minimumDecodeAudioSeconds, 1, "minimum decode audio clamps to event-safe min")
+}
+
+func testWhisperDecodeSettingsEventSafeDefaults() -> Bool {
+    let settings = WhisperDecodeSettings.eventSafeDefaults
+
+    return expectEqual(settings.temperature, 0, "default temperature") &&
+        expectEqual(settings.temperatureFallbackCount, 0, "default fallback count") &&
+        expectEqual(settings.temperatureFallbackIncrement, 0, "default fallback increment") &&
+        expectEqual(settings.liveDecodeWindowSeconds, 12, "default live decode window") &&
+        expectEqual(settings.minimumDecodeAudioSeconds, 2, "default minimum decode audio")
+}
+
 func testSRTAppendingMatchesFullFormat() -> Bool {
     let segments = [
         CaptionSegmentRecord(
@@ -1041,9 +1067,9 @@ private func testWhisperKitTranscriberUsesDeterministicLiveDecodeOptions() -> Bo
     }
 
     return expectEqual(
-        transcriber.contains("temperature: 0.0") &&
-            transcriber.contains("temperatureIncrementOnFallback: 0.0") &&
-            transcriber.contains("temperatureFallbackCount: 0") &&
+        transcriber.contains("temperature: Float(settings.temperature)") &&
+            transcriber.contains("temperatureIncrementOnFallback: Float(settings.temperatureFallbackIncrement)") &&
+            transcriber.contains("temperatureFallbackCount: settings.temperatureFallbackCount") &&
             transcriber.contains("wordTimestamps: false"),
         true,
         "live Whisper decoding should stay deterministic and avoid expensive word-timestamp alignment"
@@ -1057,8 +1083,9 @@ private func testWhisperKitTranscriberCapsRealtimeDecodeBacklog() -> Bool {
     }
 
     return expectEqual(
-        transcriber.contains("private let maximumLiveDecodeWindowSeconds: Float = 12") &&
-            transcriber.contains("private let minimumDecodeAudioSeconds: Float = 2") &&
+        transcriber.contains("let settings = currentDecodeSettings()") &&
+            transcriber.contains("let minimumDecodeAudioSeconds = Float(settings.minimumDecodeAudioSeconds)") &&
+            transcriber.contains("let maximumLiveDecodeWindowSeconds = Float(settings.liveDecodeWindowSeconds)") &&
             transcriber.contains("let recentWindowStart = max(0, snapshotDurationSeconds - maximumLiveDecodeWindowSeconds)") &&
             transcriber.contains("let clipTimestamp = max(confirmedClipTimestamp, recentWindowStart)"),
         true,
@@ -1107,6 +1134,47 @@ private func testRollupAutoClearWaitsForPendingOutput() -> Bool {
     )
 }
 
+private func testModelsWorkspaceExposesAdvancedWhisperControls() -> Bool {
+    guard let modelsWorkspace = readSource("Sources/EventSubtitlesApp/ModelsWorkspace.swift"),
+          let liveWorkspace = readSource("Sources/EventSubtitlesApp/LiveWorkspace.swift")
+    else {
+        fputs("FAIL: model/live workspace sources should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        modelsWorkspace.contains("advancedWhisperPanel") &&
+            modelsWorkspace.contains("Temperature") &&
+            modelsWorkspace.contains("Fallback count") &&
+            modelsWorkspace.contains("Fallback increment") &&
+            modelsWorkspace.contains("Live decode window") &&
+            modelsWorkspace.contains("Minimum new audio") &&
+            modelsWorkspace.contains("resetWhisperDecodeSettings()") &&
+            !liveWorkspace.contains("advancedWhisperPanel"),
+        true,
+        "Models workspace should expose Whisper tuning controls and Live should stay focused on caption operation"
+    )
+}
+
+private func testAppStatePersistsWhisperDecodeSettings() -> Bool {
+    guard let appState = readSource("Sources/EventSubtitlesApp/AppState.swift"),
+          let settingsStore = readSource("Sources/EventSubtitlesApp/AppSettingsStore.swift")
+    else {
+        fputs("FAIL: AppState settings sources should be readable\n", stderr)
+        return false
+    }
+
+    return expectEqual(
+        settingsStore.contains("var whisperDecodeSettings: WhisperDecodeSettings?") &&
+            appState.contains("var whisperDecodeSettings = WhisperDecodeSettings.eventSafeDefaults") &&
+            appState.contains("whisperDecodeSettings: whisperDecodeSettings") &&
+            appState.contains("whisperDecodeSettings = (settings.whisperDecodeSettings ?? .eventSafeDefaults).clamped()") &&
+            appState.contains("whisperKitTranscriber.setDecodeSettings(whisperDecodeSettings)"),
+        true,
+        "AppState should persist and apply live Whisper decode settings"
+    )
+}
+
 let tests = [
     ("systemDefaultModeUsesDefaultDevice", testSystemDefaultModeUsesDefaultDevice),
     ("availableOverrideWinsOverDefaultDevice", testAvailableOverrideWinsOverDefaultDevice),
@@ -1114,6 +1182,8 @@ let tests = [
     ("promptBuilderIncludesSessionAndGlossaryTerms", testPromptBuilderIncludesSessionAndGlossaryTerms),
     ("promptBuilderDropsEmptyParts", testPromptBuilderDropsEmptyParts),
     ("promptBuilderTruncatesAtCharacterLimit", testPromptBuilderTruncatesAtCharacterLimit),
+    ("whisperDecodeSettingsClampToEventSafeRanges", testWhisperDecodeSettingsClampToEventSafeRanges),
+    ("whisperDecodeSettingsEventSafeDefaults", testWhisperDecodeSettingsEventSafeDefaults),
     ("srtAppendingMatchesFullFormat", testSRTAppendingMatchesFullFormat),
     ("captionTickSchedulerComputesNearestDeadline", testCaptionTickSchedulerComputesNearestDeadline),
     ("captionTickSchedulerUsesFallbackWhenAllNil", testCaptionTickSchedulerUsesFallbackWhenAllNil),
@@ -1157,6 +1227,8 @@ let tests = [
     ("whisperKitTranscriberUsesDeterministicLiveDecodeOptions", testWhisperKitTranscriberUsesDeterministicLiveDecodeOptions),
     ("whisperKitTranscriberCapsRealtimeDecodeBacklog", testWhisperKitTranscriberCapsRealtimeDecodeBacklog),
     ("rollupOutputReservesRowsAndDisablesTextAnimation", testRollupOutputReservesRowsAndDisablesTextAnimation),
+    ("modelsWorkspaceExposesAdvancedWhisperControls", testModelsWorkspaceExposesAdvancedWhisperControls),
+    ("appStatePersistsWhisperDecodeSettings", testAppStatePersistsWhisperDecodeSettings),
     ("rollupAutoClearWaitsForPendingOutput", testRollupAutoClearWaitsForPendingOutput)
 ]
 

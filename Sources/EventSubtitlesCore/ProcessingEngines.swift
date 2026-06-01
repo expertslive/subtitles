@@ -5,17 +5,64 @@ public struct SpeechEngineConfiguration: Equatable, Sendable {
     public var sampleRate: Double
     public var glossary: String
     public var sessionName: String
+    public var whisperDecodeSettings: WhisperDecodeSettings
 
     public init(
         sourceLanguage: SourceLanguage = .automatic,
         sampleRate: Double = 16_000,
         glossary: String = "",
-        sessionName: String = ""
+        sessionName: String = "",
+        whisperDecodeSettings: WhisperDecodeSettings = .eventSafeDefaults
     ) {
         self.sourceLanguage = sourceLanguage
         self.sampleRate = sampleRate
         self.glossary = glossary
         self.sessionName = sessionName
+        self.whisperDecodeSettings = whisperDecodeSettings
+    }
+}
+
+public struct WhisperDecodeSettings: Equatable, Codable, Sendable {
+    public static let eventSafeDefaults = WhisperDecodeSettings(
+        temperature: 0,
+        temperatureFallbackCount: 0,
+        temperatureFallbackIncrement: 0,
+        liveDecodeWindowSeconds: 12,
+        minimumDecodeAudioSeconds: 2
+    )
+
+    public var temperature: Double
+    public var temperatureFallbackCount: Int
+    public var temperatureFallbackIncrement: Double
+    public var liveDecodeWindowSeconds: Double
+    public var minimumDecodeAudioSeconds: Double
+
+    public init(
+        temperature: Double = 0,
+        temperatureFallbackCount: Int = 0,
+        temperatureFallbackIncrement: Double = 0,
+        liveDecodeWindowSeconds: Double = 12,
+        minimumDecodeAudioSeconds: Double = 2
+    ) {
+        self.temperature = Self.clamp(temperature, 0...0.8)
+        self.temperatureFallbackCount = max(0, min(3, temperatureFallbackCount))
+        self.temperatureFallbackIncrement = Self.clamp(temperatureFallbackIncrement, 0...0.3)
+        self.liveDecodeWindowSeconds = Self.clamp(liveDecodeWindowSeconds, 6...20)
+        self.minimumDecodeAudioSeconds = Self.clamp(minimumDecodeAudioSeconds, 1...4)
+    }
+
+    public func clamped() -> WhisperDecodeSettings {
+        WhisperDecodeSettings(
+            temperature: temperature,
+            temperatureFallbackCount: temperatureFallbackCount,
+            temperatureFallbackIncrement: temperatureFallbackIncrement,
+            liveDecodeWindowSeconds: liveDecodeWindowSeconds,
+            minimumDecodeAudioSeconds: minimumDecodeAudioSeconds
+        )
+    }
+
+    private static func clamp(_ value: Double, _ range: ClosedRange<Double>) -> Double {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 }
 

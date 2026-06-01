@@ -9,6 +9,7 @@ struct AppSettings: Codable {
     var translationEngine: String
     var sessionName: String
     var whisperModelName: String
+    var whisperDecodeSettings: WhisperDecodeSettings?
     var translationCommandPath: String
     var translationCommandArguments: String
     var glossaryText: String
